@@ -10,7 +10,7 @@ services:
       # TODO: replace with the real VM public IP or DNS name once Member 1
       # hands it over. Everything else can stay as-is for the demo.
       GITLAB_OMNIBUS_CONFIG: |
-        external_url 'http://CHANGE_TO_VM_PUBLIC_IP'
+        external_url 'http://localhost'
         gitlab_rails['gitlab_shell_ssh_port'] = 2224
     ports:
       - "80:80"
