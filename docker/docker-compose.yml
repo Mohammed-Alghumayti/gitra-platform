@@ -1,28 +1,23 @@
-version: "3.8"
+cat << 'EOF' > docker-compose.yaml
+version: '3.8'
 
 services:
-  gitlab:
-    image: gitlab/gitlab-ce:latest
-    container_name: gitlab
+  web:
+    image: 'gitlab/gitlab-ce:latest'
+    container_name: gitlab_server
     restart: always
-    hostname: "gitlab.local"
+    hostname: 'gitlab.local'
     environment:
-      # TODO: replace with the real VM public IP or DNS name once Member 1
-      # hands it over. Everything else can stay as-is for the demo.
       GITLAB_OMNIBUS_CONFIG: |
-        external_url 'http://localhost'
+        external_url 'http://20.55.88.3'
         gitlab_rails['gitlab_shell_ssh_port'] = 2224
     ports:
-      - "80:80"
-      - "443:443"
-      - "2224:22"   # mapped away from 22 since the VM's own SSH already uses it
+      - '80:80'
+      - '443:443'
+      - '2224:22'
     volumes:
-      - gitlab_config:/etc/gitlab
-      - gitlab_logs:/var/log/gitlab
-      - gitlab_data:/var/opt/gitlab
-    shm_size: "256m"
-
-volumes:
-  gitlab_config:
-  gitlab_logs:
-  gitlab_data:
+      - './gitlab/config:/etc/gitlab'
+      - './gitlab/logs:/var/log/gitlab'
+      - './gitlab/data:/var/opt/gitlab'
+    shm_size: '256m'
+EOF
