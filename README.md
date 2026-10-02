@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/images/gitra-logo.png" alt="Gitra logo" width="420">
+</p>
+
 # Gitra Platform — Internal Git & CI/CD Platform on Azure
 
 An internal GitLab CE platform deployed on Microsoft Azure, built as a 3-person bootcamp project. The platform gives the team a single place for source control, code review, and CI/CD pipelines.
@@ -72,6 +76,24 @@ gitra-platform/
 | Allow-GitLab-SSH | 2224 | TCP | Git clone / push / pull over SSH |
 
 The internal Git SSH port is mapped to **2224** instead of 22, to avoid conflicting with the VM's own administrative SSH port.
+
+### Security
+
+**In place**
+- **Network:** only ports 22, 80, 443 and 2224 are open, each through its own NSG rule.
+- **SSH separation:** Git uses 2224 and admin SSH uses 22, so each can be restricted on its own.
+- **Permissions:** `./gitlab` is `root`-owned with mode `700`, so other VM users can't read GitLab's secrets.
+- **Secrets out of Git:** `.gitignore` excludes `gitlab/` and `gitlab-backups/`.
+- **Backups:** `backup.sh` also exports `gitlab-secrets.json` and `gitlab.rb`; treat the backup folder as sensitive.
+- **Root password:** the generated one expires after 24h. Change it on first login.
+
+**To do before real use**
+- [ ] Enable HTTPS: set `external_url 'https://<domain>'` and `letsencrypt['enable'] = true`. Port 80 is plaintext today.
+- [ ] Restrict NSG source IPs to the team, at least for ports 22 and 2224.
+- [ ] Disable public sign-up and enforce 2FA (Admin → Settings → General).
+- [ ] Pin the GitLab image version instead of `latest`.
+- [ ] Allow only SSH keys for admin SSH (no passwords).
+- [ ] Keep encrypted backups off the VM (e.g. Azure Blob Storage).
 
 ### Quick start
 
@@ -160,6 +182,7 @@ gitra-platform/
 ├── scripts/           # Member 3
 ├── sample-app/        # Member 2
 ├── docs/
+│   ├── images/         # Logo and diagrams
 │   ├── architecture.md
 │   ├── deployment.md
 │   └── troubleshooting.md
@@ -175,3 +198,4 @@ gitra-platform/
 - [ ] A sample CI/CD pipeline is demonstrated (Member 2)
 - [ ] The full end-to-end workflow is documented
 - [ ] The design reflects enterprise practice (access, secrets, hardening, recovery)
+- [ ] Items under **Security → To do** are closed

@@ -8,9 +8,14 @@ services:
       GITLAB_OMNIBUS_CONFIG: |
         external_url 'http://20.55.88.3'
         gitlab_rails['gitlab_shell_ssh_port'] = 2224
+    # HOST:CONTAINER — each host port also needs an Azure NSG rule.
     ports:
+      # Web UI over HTTP. Not encrypted until HTTPS is enabled.
       - '80:80'
+      # Reserved for HTTPS; unused until external_url is set to https://.
       - '443:443'
+      # Git over SSH. Host port 22 is kept for the VM's admin SSH, so Git
+      # traffic is separated from server access. Must match gitlab_shell_ssh_port.
       - '2224:22'
     volumes:
       - './gitlab/config:/etc/gitlab'
