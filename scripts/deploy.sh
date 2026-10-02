@@ -1,4 +1,3 @@
-cat << 'EOF' > scripts/deploy.sh
 #!/bin/bash
 set -e
 
@@ -13,10 +12,14 @@ echo "✅ Found Docker Compose file."
 
 echo "=== [2/3] Creating Persistent Storage Directories ==="
 mkdir -p ./gitlab/config ./gitlab/logs ./gitlab/data
-sudo chmod -R 777 ./gitlab
+# SECURITY FIX: 700 (owner-only) instead of 777.
+# GitLab's entrypoint runs as root inside the container and manages its own
+# internal file ownership, so the host side only needs to be readable/
+# writable by root — 777 let every user on the VM read GitLab's secrets.
+sudo chown -R root:root ./gitlab
+sudo chmod -R 700 ./gitlab
 
 echo "=== [3/3] Launching GitLab Services via Docker Compose ==="
 docker compose up -d
 
 echo "✅ GitLab Deployment Triggered successfully!"
-EOF

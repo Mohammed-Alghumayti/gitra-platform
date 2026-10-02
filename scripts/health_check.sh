@@ -1,14 +1,24 @@
-cat << 'EOF' > scripts/health_check.sh
 #!/bin/bash
+# Waits for GitLab to become reachable instead of checking only once.
+# Usage: ./scripts/health_check.sh [max_wait_seconds]   (default: 300 = 5 minutes)
+
+MAX_WAIT="${1:-300}"
+INTERVAL=10
+ELAPSED=0
 
 echo "=== Checking GitLab Container Status ==="
 
-STATUS_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:80 || echo "000000")
+while [ "$ELAPSED" -lt "$MAX_WAIT" ]; do
+    STATUS_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:80 || echo "000")
+    if [ "$STATUS_CODE" -eq 200 ] || [ "$STATUS_CODE" -eq 302 ]; then
+        echo "✅ GitLab is UP and healthy! (HTTP Status: $STATUS_CODE)"
+        exit 0
+    fi
+    printf "⏳ Not ready yet (HTTP %s) — waited %ss / %ss\n" "$STATUS_CODE" "$ELAPSED" "$MAX_WAIT"
+    sleep "$INTERVAL"
+    ELAPSED=$((ELAPSED + INTERVAL))
+done
 
-if [ "$STATUS_CODE" -eq 200 ] || [ "$STATUS_CODE" -eq 302 ]; then
-    echo "✅ GitLab is UP and healthy! (HTTP Status: $STATUS_CODE)"
-else
-    echo "⏳ GitLab is still starting up or unavailable. (HTTP Status: $STATUS_CODE)"
-    echo "Note: GitLab usually takes 2 to 4 minutes on initial startup."
-fi
-EOF
+echo "❌ GitLab did not become healthy within ${MAX_WAIT}s. Check logs with:"
+echo "   docker logs gitlab_server --tail 100"
+exit 1

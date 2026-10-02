@@ -1,6 +1,3 @@
-mkdir -p scripts
-
-cat << 'EOF' > scripts/setup.sh
 #!/bin/bash
 set -e
 
@@ -20,4 +17,3 @@ else
 fi
 
 echo "=== Setup Completed ==="
-EOF

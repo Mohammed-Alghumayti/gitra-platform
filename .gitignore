@@ -1,0 +1,5 @@
+# Local GitLab runtime data — contains secrets and user data, never commit this
+gitlab/
+
+# Local backup output
+gitlab-backups/
