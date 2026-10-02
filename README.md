@@ -2,7 +2,7 @@
 
 An internal GitLab CE platform deployed on Microsoft Azure, built as a 3-person bootcamp project. The platform gives the team a single place for source control, code review, and CI/CD pipelines.
 
-**Live environment:** `http://20.55.88.3` (Azure VM, Ubuntu 22.04 LTS)
+**Live environment:** `http://20.55.88.3` "for Now" (Azure VM, Ubuntu 22.04 LTS)
 
 > **v2.0 update:** fixed `external_url` pointing at `localhost` instead of the public IP, tightened storage folder permissions from `777` to `700`, added a backup script, and added `.gitignore` so GitLab's secrets/data folder is never committed. See [Update Log](#update-log--v20) below.
 
@@ -10,9 +10,9 @@ An internal GitLab CE platform deployed on Microsoft Azure, built as a 3-person 
 
 | Member | Workstream | Status |
 |---|---|---|
-| **Member 1** — Mohammed | Azure Infrastructure & Terraform | 🔲 _To be added_ |
+| **Member 1** — Nasser | Azure Infrastructure & Terraform | 🔲 _To be added_ |
 | **Member 2** — Faisal | GitLab & CI/CD Configuration | 🔲 _To be added_ |
-| **Member 3** — Ghadeer | Docker, Bash Automation & Operations | ✅ Complete (this section) |
+| **Member 3** — Mohammed | Docker, Bash Automation & Operations | ✅ Complete (this section) |
 
 > This README is a shared document. Each member should fill in their own section below rather than create a separate file, so the whole team's work reads as one coherent project.
 
