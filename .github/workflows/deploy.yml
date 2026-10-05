@@ -1,0 +1,217 @@
+# Fully automatic deployment of the Gitra platform.
+# Every push to Testing (or a manual run) does all of this, end to end:
+#   1. Prepares the existing GitLab VM on Azure (static IP, DNS name, NSG, deploy user)
+#   2. Deploys/updates GitLab on it with HTTPS + security settings
+#   3. Creates/updates the runner VM with Terraform (state kept in Azure Storage)
+#   4. Registers the runner with GitLab (only when needed)
+#   5. Pushes sample-app/ to GitLab and waits for its pipeline
+# One-time setup (secrets): see "Automatic deployment" in README.md.
+name: Deploy Gitra Platform
+
+on:
+  push:
+    branches: [Testing]
+  workflow_dispatch:
+
+concurrency:
+  group: gitra-deploy
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  GITLAB_VM_IP: ${{ vars.GITLAB_VM_IP || '20.55.88.3' }}
+  DNS_LABEL: ${{ vars.DNS_LABEL }}
+  DEPLOY_USER: gitra-deploy
+  RUNNER_USER: azureuser
+  TF_STATE_RG: gitra-tfstate-rg
+  SSH_OPTS: -i ~/.ssh/gitra -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=20
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Check one-time setup
+        id: setup
+        env:
+          AZURE_CREDENTIALS: ${{ secrets.AZURE_CREDENTIALS }}
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          GITLAB_ROOT_PASSWORD: ${{ secrets.GITLAB_ROOT_PASSWORD }}
+        run: |
+          missing=""
+          [ -n "$AZURE_CREDENTIALS" ] || missing="$missing AZURE_CREDENTIALS"
+          [ -n "$SSH_PRIVATE_KEY" ] || missing="$missing SSH_PRIVATE_KEY"
+          [ -n "$GITLAB_ROOT_PASSWORD" ] || missing="$missing GITLAB_ROOT_PASSWORD"
+          if [ -n "$missing" ]; then
+            echo "::warning::Deployment skipped — missing secrets:$missing. See README → Automatic deployment."
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v4
+        if: steps.setup.outputs.ready == 'true'
+
+      - name: Azure login
+        if: steps.setup.outputs.ready == 'true'
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: SSH key
+        if: steps.setup.outputs.ready == 'true'
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/gitra
+          chmod 600 ~/.ssh/gitra
+          ssh-keygen -y -f ~/.ssh/gitra > ~/.ssh/gitra.pub
+
+      - name: "1. Prepare GitLab VM on Azure"
+        id: vm
+        if: steps.setup.outputs.ready == 'true'
+        run: |
+          SSH_PUBLIC_KEY="$(cat ~/.ssh/gitra.pub)"
+          export SSH_PUBLIC_KEY
+          bash scripts/ci/azure_prepare_gitlab_vm.sh
+
+      - name: "2. Deploy GitLab (HTTPS + security settings)"
+        if: steps.setup.outputs.ready == 'true'
+        run: |
+          # shellcheck disable=SC2086
+          ssh $SSH_OPTS "$DEPLOY_USER@$GITLAB_VM_IP" \
+            "sudo bash -s -- '${{ github.server_url }}/${{ github.repository }}.git' '${{ github.ref_name }}' 'https://${{ steps.vm.outputs.fqdn }}'" \
+            < scripts/ci/remote_deploy_gitlab.sh
+
+      - name: "3a. Terraform state storage"
+        id: tfstate
+        if: steps.setup.outputs.ready == 'true'
+        run: |
+          SUB=$(az account show --query id -o tsv)
+          SA="gitratf$(printf '%s' "$SUB" | sha256sum | cut -c1-12)"
+          az group create -n "$TF_STATE_RG" -l "${{ steps.vm.outputs.location }}" -o none
+          if ! az storage account show -n "$SA" -g "$TF_STATE_RG" -o none 2>/dev/null; then
+            az storage account create -n "$SA" -g "$TF_STATE_RG" -l "${{ steps.vm.outputs.location }}" \
+              --sku Standard_LRS --min-tls-version TLS1_2 --allow-blob-public-access false -o none
+          fi
+          KEY=$(az storage account keys list -n "$SA" -g "$TF_STATE_RG" --query '[0].value' -o tsv)
+          echo "::add-mask::$KEY"
+          az storage container create -n tfstate --account-name "$SA" --account-key "$KEY" -o none
+          echo "account=$SA" >> "$GITHUB_OUTPUT"
+
+      - uses: hashicorp/setup-terraform@v3
+        if: steps.setup.outputs.ready == 'true'
+        with:
+          terraform_wrapper: false
+
+      - name: "3b. Runner VM (Terraform)"
+        id: tf
+        if: steps.setup.outputs.ready == 'true'
+        working-directory: terraform
+        env:
+          AZURE_CREDENTIALS: ${{ secrets.AZURE_CREDENTIALS }}
+        run: |
+          ARM_CLIENT_ID=$(jq -r .clientId <<< "$AZURE_CREDENTIALS")
+          ARM_CLIENT_SECRET=$(jq -r .clientSecret <<< "$AZURE_CREDENTIALS")
+          ARM_TENANT_ID=$(jq -r .tenantId <<< "$AZURE_CREDENTIALS")
+          ARM_SUBSCRIPTION_ID=$(jq -r .subscriptionId <<< "$AZURE_CREDENTIALS")
+          TF_VAR_subscription_id="$ARM_SUBSCRIPTION_ID"
+          TF_VAR_location="${{ steps.vm.outputs.location }}"
+          TF_VAR_admin_username="$RUNNER_USER"
+          TF_VAR_admin_ssh_public_key="$(cat ~/.ssh/gitra.pub)"
+          TF_VAR_gitlab_url="https://${{ steps.vm.outputs.fqdn }}"
+          TF_VAR_repo_url="${{ github.server_url }}/${{ github.repository }}.git"
+          TF_VAR_repo_branch="${{ github.ref_name }}"
+          export ARM_CLIENT_ID ARM_CLIENT_SECRET ARM_TENANT_ID ARM_SUBSCRIPTION_ID
+          export TF_VAR_subscription_id TF_VAR_location TF_VAR_admin_username TF_VAR_admin_ssh_public_key TF_VAR_gitlab_url TF_VAR_repo_url TF_VAR_repo_branch
+          terraform init -input=false \
+            -backend-config="resource_group_name=$TF_STATE_RG" \
+            -backend-config="storage_account_name=${{ steps.tfstate.outputs.account }}" \
+            -backend-config="container_name=tfstate" \
+            -backend-config="key=gitra-runner.tfstate"
+          terraform apply -input=false -auto-approve
+          echo "runner_ip=$(terraform output -raw runner_public_ip)" >> "$GITHUB_OUTPUT"
+          echo "staging_url=$(terraform output -raw staging_app_url)" >> "$GITHUB_OUTPUT"
+
+      - name: "3c. Wait for runner VM and update it"
+        id: runner
+        if: steps.setup.outputs.ready == 'true'
+        run: |
+          IP="${{ steps.tf.outputs.runner_ip }}"
+          for _ in $(seq 1 30); do
+            # shellcheck disable=SC2086
+            ssh $SSH_OPTS "$RUNNER_USER@$IP" true 2>/dev/null && break
+            sleep 10
+          done
+          # shellcheck disable=SC2086
+          ssh $SSH_OPTS "$RUNNER_USER@$IP" "sudo cloud-init status --wait >/dev/null || true
+            cd ~/gitra-platform
+            git fetch -q --depth 1 origin '${{ github.ref_name }}' && git checkout -q -f -B '${{ github.ref_name }}' FETCH_HEAD
+            sudo bash scripts/deploy_runner.sh"
+          # shellcheck disable=SC2086
+          if ssh $SSH_OPTS "$RUNNER_USER@$IP" "sudo grep -q 'token = ' ~/gitra-platform/runner/config.toml" 2>/dev/null; then
+            echo "need_runner=0" >> "$GITHUB_OUTPUT"
+          else
+            echo "need_runner=1" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: "4a. GitLab bootstrap (root password, tokens)"
+        id: boot
+        if: steps.setup.outputs.ready == 'true'
+        env:
+          GITLAB_ROOT_PASSWORD: ${{ secrets.GITLAB_ROOT_PASSWORD }}
+        run: |
+          VM="$DEPLOY_USER@$GITLAB_VM_IP"
+          # shellcheck disable=SC2086
+          scp $SSH_OPTS scripts/ci/gitlab_bootstrap.rb "$VM:/tmp/gitlab_bootstrap.rb"
+          # Secrets go through stdin into a root-only env file, never on a command line.
+          # shellcheck disable=SC2086
+          printf 'ROOT_PASSWORD=%s\nNEED_RUNNER=%s\n' "$GITLAB_ROOT_PASSWORD" "${{ steps.runner.outputs.need_runner }}" | \
+            ssh $SSH_OPTS "$VM" "sudo sh -c 'umask 077; cat > /root/gitra-bootstrap.env'"
+          # shellcheck disable=SC2086
+          OUT=$(ssh $SSH_OPTS "$VM" "sudo sh -c 'docker cp /tmp/gitlab_bootstrap.rb gitlab_server:/tmp/gitlab_bootstrap.rb \
+            && docker exec --env-file /root/gitra-bootstrap.env gitlab_server gitlab-rails runner /tmp/gitlab_bootstrap.rb; \
+            rc=\$?; rm -f /root/gitra-bootstrap.env /tmp/gitlab_bootstrap.rb; exit \$rc'")
+          PAT=$(grep '^PAT=' <<< "$OUT" | cut -d= -f2-)
+          RUNNER_TOKEN=$(grep '^RUNNER_TOKEN=' <<< "$OUT" | cut -d= -f2- || true)
+          echo "::add-mask::$PAT"
+          [ -z "$RUNNER_TOKEN" ] || echo "::add-mask::$RUNNER_TOKEN"
+          grep -q '^ROOT_PASSWORD_UPDATED=1' <<< "$OUT" && echo "root password updated from secret" || true
+          echo "pat=$PAT" >> "$GITHUB_OUTPUT"
+          echo "runner_token=$RUNNER_TOKEN" >> "$GITHUB_OUTPUT"
+
+      - name: "4b. Register runner"
+        if: steps.setup.outputs.ready == 'true' && steps.runner.outputs.need_runner == '1'
+        run: |
+          # shellcheck disable=SC2086
+          ssh $SSH_OPTS "$RUNNER_USER@${{ steps.tf.outputs.runner_ip }}" \
+            "cd ~/gitra-platform && sudo bash scripts/register_runner.sh '${{ steps.boot.outputs.runner_token }}' 'https://${{ steps.vm.outputs.fqdn }}'"
+
+      - name: "5. Push demo app and run its pipeline"
+        if: steps.setup.outputs.ready == 'true'
+        env:
+          GITLAB_URL: https://${{ steps.vm.outputs.fqdn }}
+          GITLAB_PAT: ${{ steps.boot.outputs.pat }}
+        run: bash scripts/ci/push_demo_app.sh
+
+      - name: Revoke temporary token
+        if: always() && steps.boot.outputs.pat != ''
+        run: |
+          curl -sf -X DELETE -H "PRIVATE-TOKEN: ${{ steps.boot.outputs.pat }}" \
+            "https://${{ steps.vm.outputs.fqdn }}/api/v4/personal_access_tokens/self" || true
+
+      - name: Summary
+        if: always() && steps.setup.outputs.ready == 'true'
+        run: |
+          {
+            echo "## Gitra Platform"
+            echo "| | |"
+            echo "|---|---|"
+            echo "| GitLab | https://${{ steps.vm.outputs.fqdn }} |"
+            echo "| Login | \`root\` + the GITLAB_ROOT_PASSWORD secret (2FA set up on first login) |"
+            echo "| Demo project | https://${{ steps.vm.outputs.fqdn }}/root/internal-demo-app |"
+            echo "| Staging app | ${{ steps.tf.outputs.staging_url }} |"
+          } >> "$GITHUB_STEP_SUMMARY"

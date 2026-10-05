@@ -7,7 +7,7 @@ services:
     restart: always
     hostname: 'gitlab.local'
     environment:
-      # GITLAB_EXTERNAL_URL comes from .env (written by Terraform's cloud-init).
+      # GITLAB_EXTERNAL_URL comes from .env (written by the deploy workflow).
       # With an https:// URL GitLab requests a Let's Encrypt certificate
       # automatically and redirects HTTP to HTTPS.
       GITLAB_OMNIBUS_CONFIG: |

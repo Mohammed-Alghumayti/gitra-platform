@@ -10,27 +10,21 @@ variable "project_name" {
 }
 
 variable "location" {
-  description = "Azure region."
+  description = "Azure region. The workflow uses the GitLab VM's region."
   type        = string
   default     = "eastus"
 }
 
 variable "vnet_address_space" {
-  description = "Address space of the virtual network."
+  description = "Address space of the runner's virtual network."
   type        = string
   default     = "10.10.0.0/16"
 }
 
 variable "subnet_address_prefix" {
-  description = "Address prefix of the VM subnet."
+  description = "Address prefix of the runner subnet."
   type        = string
   default     = "10.10.1.0/24"
-}
-
-variable "vm_size" {
-  description = "GitLab VM size. GitLab CE needs at least 4 GB RAM; 8 GB is recommended."
-  type        = string
-  default     = "Standard_D2s_v3" # 2 vCPU, 8 GB RAM
 }
 
 variable "runner_vm_size" {
@@ -39,28 +33,15 @@ variable "runner_vm_size" {
   default     = "Standard_B2s" # 2 vCPU, 4 GB RAM
 }
 
-variable "dns_label" {
-  description = "Free Azure DNS name for GitLab: <dns_label>.<location>.cloudapp.azure.com. Must be unique in the region. Needed for the HTTPS certificate."
-  type        = string
-  default     = "gitra-platform"
-}
-
-variable "os_disk_size_gb" {
-  description = "OS disk size in GB (holds Docker images and GitLab data)."
-  type        = number
-  default     = 64
-}
-
 variable "admin_username" {
-  description = "Admin user on the VM."
+  description = "Admin user on the runner VM."
   type        = string
   default     = "azureuser"
 }
 
-variable "admin_ssh_public_key_path" {
-  description = "Path to the SSH public key used to log in to the VM (password login is disabled)."
+variable "admin_ssh_public_key" {
+  description = "SSH public key (contents) for the runner VM. Password login is disabled."
   type        = string
-  default     = "~/.ssh/id_rsa.pub"
 }
 
 variable "admin_source_cidrs" {
@@ -70,19 +51,24 @@ variable "admin_source_cidrs" {
 }
 
 variable "user_source_cidrs" {
-  description = "CIDRs allowed to reach GitLab web, Git SSH and the staging app. Public by design."
+  description = "CIDRs allowed to reach the staging app. Public by design."
   type        = list(string)
   default     = ["0.0.0.0/0"]
 }
 
+variable "gitlab_url" {
+  description = "GitLab URL the runner connects to, e.g. https://gitra-xxxx.eastus.cloudapp.azure.com"
+  type        = string
+}
+
 variable "repo_url" {
-  description = "Git repository cloned on the VM to deploy GitLab."
+  description = "Git repository cloned on the runner VM."
   type        = string
   default     = "https://github.com/Mohammed-Alghumayti/gitra-platform.git"
 }
 
 variable "repo_branch" {
-  description = "Branch of repo_url to deploy."
+  description = "Branch of repo_url to clone."
   type        = string
   default     = "Testing"
 }

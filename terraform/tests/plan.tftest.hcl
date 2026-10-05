@@ -1,13 +1,12 @@
-# Plan-level tests with a mocked Azure provider — no Azure account needed.
-# Run: terraform init && terraform test
+# Tests with a mocked Azure provider — no Azure account needed.
+# Run: terraform init -backend=false && terraform test
 
 # Mocked IDs must look like real Azure resource IDs.
 mock_provider "azurerm" {
   mock_resource "azurerm_public_ip" {
     defaults = {
       id         = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/gitra-rg/providers/Microsoft.Network/publicIPAddresses/mock-pip"
-      fqdn       = "gitra-platform.eastus.cloudapp.azure.com"
-      ip_address = "20.0.0.10"
+      ip_address = "20.0.0.20"
     }
   }
   mock_resource "azurerm_subnet" {
@@ -22,63 +21,45 @@ mock_provider "azurerm" {
 }
 
 variables {
-  subscription_id           = "00000000-0000-0000-0000-000000000000"
-  admin_ssh_public_key_path = "tests/test_key.pub"
+  subscription_id      = "00000000-0000-0000-0000-000000000000"
+  admin_ssh_public_key = "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQCqweEUK2w/Vck50baGNEDNABZitNbORQgvBHcgOXrAWlmWIjtzBlijMfdT8YrtXk7GUb03K4M3jfHXSDucU8MpxLQp7IwjcVqCJQVRwB6J0CzgaEmH0IAZoNtcnrQnM9pI8SrP8T8qs5NCkxZO2XaaYGRYiV2Q1x7Ry5hhtUD+lhGOnCEKc5qd25BkGJfnYVV3S34MFpQ2jlxhZxRZfG6GJ57WF/RcVXmpZ3Qz9Rm9s5VDcnAzh6sjx/+tUkYft8ah+717EgVHns0M157xcHA5g1wmNIn2UQAAwsjbciev6akdXrGFQDJac+7NMejMQ6FuiJz7KWqhEzVVKLS9ZK/9 test-only-not-a-real-key"
+  gitlab_url           = "https://gitra-test.eastus.cloudapp.azure.com"
 }
 
-run "gitlab_and_runner_are_separate_vms" {
+run "runner_vm_starts_the_runner_against_gitlab" {
   command = apply
-
-  assert {
-    condition     = azurerm_linux_virtual_machine.gitlab.name != azurerm_linux_virtual_machine.runner.name && azurerm_network_interface.gitlab.name != azurerm_network_interface.runner.name
-    error_message = "GitLab and the runner must be on different VMs and NICs."
-  }
-
-  assert {
-    condition     = strcontains(base64decode(azurerm_linux_virtual_machine.gitlab.custom_data), "deploy.sh") && !strcontains(base64decode(azurerm_linux_virtual_machine.gitlab.custom_data), "deploy_runner.sh")
-    error_message = "The GitLab VM must deploy GitLab only, not the runner."
-  }
 
   assert {
     condition     = strcontains(base64decode(azurerm_linux_virtual_machine.runner.custom_data), "deploy_runner.sh")
-    error_message = "The runner VM must start the runner."
+    error_message = "The runner VM must start the runner on first boot."
+  }
+
+  assert {
+    condition     = strcontains(base64decode(azurerm_linux_virtual_machine.runner.custom_data), "GITLAB_EXTERNAL_URL=https://gitra-test.eastus.cloudapp.azure.com")
+    error_message = "The runner must point at GitLab's HTTPS URL."
+  }
+
+  assert {
+    condition     = !strcontains(base64decode(azurerm_linux_virtual_machine.runner.custom_data), "scripts/deploy.sh")
+    error_message = "The runner VM must not run GitLab."
   }
 }
 
-run "gitlab_uses_https_and_hardening" {
+run "runner_vm_is_locked_down" {
   command = apply
 
   assert {
-    condition     = output.gitlab_url == "https://gitra-platform.eastus.cloudapp.azure.com"
-    error_message = "GitLab must be served over HTTPS on the Azure DNS name."
-  }
-
-  assert {
-    condition     = strcontains(base64decode(azurerm_linux_virtual_machine.gitlab.custom_data), "GITLAB_EXTERNAL_URL=https://")
-    error_message = "cloud-init must configure an https:// external_url."
-  }
-
-  assert {
-    condition     = strcontains(base64decode(azurerm_linux_virtual_machine.gitlab.custom_data), "harden_gitlab.sh")
-    error_message = "cloud-init must apply GitLab security settings."
-  }
-
-  assert {
-    condition     = azurerm_linux_virtual_machine.gitlab.disable_password_authentication && azurerm_linux_virtual_machine.runner.disable_password_authentication
-    error_message = "Both VMs must be SSH-key only."
-  }
-}
-
-run "nsg_ports_are_minimal" {
-  command = apply
-
-  assert {
-    condition     = toset([for r in azurerm_network_security_group.gitlab.security_rule : r.destination_port_range]) == toset(["22", "80", "443", "2224"])
-    error_message = "GitLab NSG must open exactly 22, 80, 443, 2224."
+    condition     = azurerm_linux_virtual_machine.runner.disable_password_authentication
+    error_message = "The runner VM must be SSH-key only."
   }
 
   assert {
     condition     = toset([for r in azurerm_network_security_group.runner.security_rule : r.destination_port_range]) == toset(["22", "5000"])
     error_message = "Runner NSG must open exactly 22 and 5000."
+  }
+
+  assert {
+    condition     = output.staging_app_url == "http://20.0.0.20:5000"
+    error_message = "Staging URL must use the runner's public IP."
   }
 }
