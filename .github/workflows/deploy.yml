@@ -13,6 +13,8 @@ name: Deploy Gitra Platform
 on:
   push:
     branches: [Testing]
+    # Docs-only changes don't need a redeploy.
+    paths-ignore: ['**.md', 'docs/**']
   workflow_dispatch:
 
 concurrency:
@@ -25,7 +27,7 @@ permissions:
 env:
   GITLAB_VM_IP: ${{ vars.GITLAB_VM_IP || '20.55.88.3' }}
   DNS_LABEL: ${{ vars.DNS_LABEL }}
-  RUNNER_LOCATION: ${{ vars.RUNNER_LOCATION || 'westus2' }}
+  RUNNER_LOCATION: ${{ vars.RUNNER_LOCATION }}
   RUNNER_VM_SIZE: ${{ vars.RUNNER_VM_SIZE }}
   DEPLOY_USER: gitra-deploy
   RUNNER_USER: azureuser
@@ -144,36 +146,57 @@ jobs:
           ARM_TENANT_ID=$(jq -r .tenantId <<< "$AZURE_CREDENTIALS")
           ARM_SUBSCRIPTION_ID=$(jq -r .subscriptionId <<< "$AZURE_CREDENTIALS")
           TF_VAR_subscription_id="$ARM_SUBSCRIPTION_ID"
-          TF_VAR_location="$RUNNER_LOCATION"
           TF_VAR_admin_username="$RUNNER_USER"
           TF_VAR_admin_ssh_public_key="$(cat ~/.ssh/gitra.pub)"
           TF_VAR_gitlab_url="https://${{ steps.vm.outputs.fqdn }}"
           TF_VAR_repo_url="${{ github.server_url }}/${{ github.repository }}.git"
           TF_VAR_repo_branch="${{ github.ref_name }}"
           export ARM_CLIENT_ID ARM_CLIENT_SECRET ARM_TENANT_ID ARM_SUBSCRIPTION_ID
-          export TF_VAR_subscription_id TF_VAR_location TF_VAR_admin_username TF_VAR_admin_ssh_public_key TF_VAR_gitlab_url TF_VAR_repo_url TF_VAR_repo_branch
+          export TF_VAR_subscription_id TF_VAR_admin_username TF_VAR_admin_ssh_public_key TF_VAR_gitlab_url TF_VAR_repo_url TF_VAR_repo_branch
           terraform init -input=false \
             -backend-config="resource_group_name=$TF_STATE_RG" \
             -backend-config="storage_account_name=${{ steps.tfstate.outputs.account }}" \
             -backend-config="container_name=tfstate" \
             -backend-config="key=gitra-runner.tfstate"
-          # Small 2-vCPU sizes, tried in order: student subscriptions often lack
-          # capacity for a given size in a region (SkuNotAvailable).
-          # RUNNER_VM_SIZE (repo variable) pins one size instead.
+          # Student subscriptions often have no capacity for a size in a region
+          # (SkuNotAvailable / "Allocation failed"). Try small 2-vCPU sizes in
+          # several regions, first one Azure accepts wins. eastus is skipped:
+          # the GitLab VM already uses that region's whole 4-vCPU quota.
+          # RUNNER_LOCATION / RUNNER_VM_SIZE (repo variables) pin one value.
+          LOCATIONS="${RUNNER_LOCATION:-westus2 centralus eastus2 westus3 northeurope}"
           SIZES="${RUNNER_VM_SIZE:-Standard_B2s Standard_B2als_v2 Standard_B2as_v2 Standard_B2s_v2 Standard_D2as_v5 Standard_D2s_v5 Standard_D2s_v3}"
-          applied=""
-          for size in $SIZES; do
-            echo "--- Trying runner size $size in $RUNNER_LOCATION ---"
-            if terraform apply -input=false -auto-approve -var "runner_vm_size=$size"; then
-              applied="$size"
-              break
+          RUNNER_RG="gitra-runner-rg"
+
+          # A failed allocation can leave a half-created VM (and its disk) that
+          # Terraform doesn't track; the next attempt would then fail with
+          # "already exists". Remove such leftovers before each attempt.
+          cleanup_failed_vm() {
+            if ! terraform state list 2>/dev/null | grep -qx 'azurerm_linux_virtual_machine.runner' &&
+               az vm show -g "$RUNNER_RG" -n gitra-runner-vm -o none 2>/dev/null; then
+              echo "Removing a half-created runner VM left by a failed attempt..."
+              az vm delete -g "$RUNNER_RG" -n gitra-runner-vm --yes -o none
             fi
+            for disk in $(az disk list -g "$RUNNER_RG" --query "[?managedBy==null].id" -o tsv 2>/dev/null); do
+              az disk delete --ids "$disk" --yes -o none
+            done
+          }
+
+          applied=""
+          for loc in $LOCATIONS; do
+            for size in $SIZES; do
+              echo "--- Trying runner size $size in $loc ---"
+              cleanup_failed_vm
+              if terraform apply -input=false -auto-approve -var "location=$loc" -var "runner_vm_size=$size"; then
+                applied="$size in $loc"
+                break 2
+              fi
+            done
           done
           if [ -z "$applied" ]; then
-            echo "::error::No runner size available in $RUNNER_LOCATION. Set the RUNNER_LOCATION variable to another region (e.g. centralus, northeurope)."
+            echo "::error::No runner VM size had capacity in: $LOCATIONS. Set RUNNER_LOCATION (repo variable) to another region your subscription allows."
             exit 1
           fi
-          echo "✅ Runner VM size: $applied"
+          echo "✅ Runner VM: $applied"
           echo "runner_ip=$(terraform output -raw runner_public_ip)" >> "$GITHUB_OUTPUT"
           echo "staging_url=$(terraform output -raw staging_app_url)" >> "$GITHUB_OUTPUT"
 

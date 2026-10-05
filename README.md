@@ -8,7 +8,15 @@ An internal GitLab CE platform deployed on Microsoft Azure, built as a 3-person 
 
 **Fully automatic:** after a one-time setup, every push to `Testing` deploys everything with GitHub Actions — nobody needs to log in to a server.
 
-**Live environment:** the team's Azure VM (`20.55.88.3`), served over HTTPS at `https://<dns-label>.<region>.cloudapp.azure.com` (shown in each workflow run's summary).
+**Live environment:** [https://gitra-25ee91e6.eastus.cloudapp.azure.com](https://gitra-25ee91e6.eastus.cloudapp.azure.com) — the team's Azure VM (`20.55.88.3`, East US), over HTTPS. The staging app URL is shown in each workflow run's summary.
+
+## Documentation
+
+| Document | Contents |
+|---|---|
+| [Architecture](docs/architecture.md) | System design, each member's part, network and security model |
+| [Deployment & Operations](docs/deployment.md) | One-time setup, what each deployment does, starting/stopping servers, backups, what's safe to delete |
+| [Troubleshooting & Change Log](docs/troubleshooting.md) | Every problem we hit and how we fixed it, common issues, what's left to improve |
 
 ## Team & Workstreams
 
@@ -33,7 +41,7 @@ An internal GitLab CE platform deployed on Microsoft Azure, built as a 3-person 
    NSG, deploy user       (state in Azure Storage)
           │                    │
           ▼                    ▼
-   GitLab VM  (existing, 20.55.88.3, East US)     Runner VM  (gitra-runner-vm, West US 2)
+   GitLab VM  (gitra-gitlab-vm, East US)          Runner VM  (gitra-runner-vm, West US 2)
    NSG: 22, 80, 443, 2224                          NSG: 22, 5000
    ┌───────────────────────────┐                   ┌───────────────────────────┐
    │ GitLab CE (Docker)        │ ◄──── HTTPS ───── │ GitLab Runner (Docker)    │
@@ -61,7 +69,7 @@ gitra-platform/
 ├── docker-compose.runner.yaml     # GitLab Runner (runner VM)
 ├── scripts/                       # Member 3
 │   ├── deploy.sh                   # Storage folders + launch GitLab
-│   ├── health_check.sh             # Waits until GitLab is really ready (container healthy + HTTP)
+│   ├── health_check.sh             # Waits until GitLab is really ready (/-/readiness + HTTP)
 │   ├── harden_gitlab.sh            # Sign-up approval, mandatory 2FA, password policy
 │   ├── deploy_runner.sh            # Launch the runner (runner VM)
 │   ├── register_runner.sh          # Register the runner with GitLab
@@ -69,11 +77,12 @@ gitra-platform/
 │   ├── setup.sh                    # Installs Docker (manual install path)
 │   └── ci/                         # Used by the GitHub Actions workflow
 │       ├── azure_prepare_gitlab_vm.sh  # Static IP, DNS name, NSG, deploy user
-│       ├── remote_deploy_gitlab.sh     # Deploys GitLab on the VM (keeps existing data)
+│       ├── remote_deploy_gitlab.sh     # Deploys GitLab on the VM (keeps data, repairs permissions)
 │       ├── gitlab_bootstrap.rb         # Root password, runner token, temp token
+│       ├── run_gitlab_bootstrap.sh     # Runs it over SSH (secrets via stdin, retries)
 │       └── push_demo_app.sh            # Pushes sample-app/ and waits for its pipeline
 ├── sample-app/                    # Member 2 — demo Flask app + pipeline
-└── docs/images/                   # Logo
+└── docs/                        # architecture.md, deployment.md, troubleshooting.md, images/
 ```
 
 ---
@@ -102,7 +111,7 @@ The first command prints a JSON block; the last one prints a private key. Keep b
 | `SSH_PRIVATE_KEY` | The whole private key from step 1 (`-----BEGIN … END …-----`) |
 | `GITLAB_ROOT_PASSWORD` | A strong password for GitLab's `root` (12+ characters, not a common word) |
 
-Optional, under the **Variables** tab: `GITLAB_VM_IP` (default `20.55.88.3`), `DNS_LABEL` (default `gitra-<8 chars>`) `RUNNER_LOCATION` (default `westus2`) and `RUNNER_VM_SIZE` (default: the first available of several small 2-vCPU sizes).
+Optional, under the **Variables** tab: `GITLAB_VM_IP` (default `20.55.88.3`), `DNS_LABEL` (default `gitra-<8 chars>`), `RUNNER_LOCATION` and `RUNNER_VM_SIZE` (by default the workflow tries several small 2-vCPU sizes in `westus2`, `centralus`, `eastus2`, `westus3`, `northeurope` and uses the first one Azure has capacity for).
 
 **3. Run it** — **Actions → Deploy Gitra Platform → Run workflow** (or just push to `Testing`).
 
@@ -111,8 +120,8 @@ Optional, under the **Variables** tab: `GITLAB_VM_IP` (default `20.55.88.3`), `D
 | Step | What happens |
 |---|---|
 | 1. Prepare GitLab VM | Finds the VM by its IP, starts it if stopped, makes the IP static, adds a free DNS name, opens ports 22/80/443/2224 in its NSG if needed, adds the `gitra-deploy` user with the SSH key |
-| 2. Deploy GitLab | Pulls this branch to `/opt/gitra-platform`, moves any existing GitLab data there (nothing is lost), starts GitLab with HTTPS, applies the security settings, sets `root`'s password from the secret |
-| 3. Runner VM | Terraform creates/updates `gitra-runner-vm` in `gitra-runner-rg` (state kept in Azure Storage, so runs don't duplicate anything) |
+| 2. Deploy GitLab | Pulls this branch to `/opt/gitra-platform`, moves any existing GitLab data there (nothing is lost), starts GitLab with HTTPS, repairs file permissions if GitLab can't read its own files, waits until it's ready, applies the security settings, sets `root`'s password from the secret |
+| 3. Runner VM | Terraform creates/updates `gitra-runner-vm` in `gitra-runner-rg` (state kept in Azure Storage, so runs don't duplicate anything). It tries several sizes and regions until Azure has capacity, cleaning up after each failed attempt |
 | 4. Runner registration | Registers the runner with GitLab (only when needed) |
 | 5. Demo app | Pushes `sample-app/` to GitLab and waits for its pipeline: **test → build → deploy_staging** |
 
@@ -188,7 +197,7 @@ Two risks came up while designing the platform. This is how each one is solved.
 Git SSH is on **2224** so it never conflicts with the VM's admin SSH on 22.
 
 ### Other measures
-- **Permissions:** `./gitlab` and `./runner` are `root`-owned with mode `700`.
+- **Permissions:** the parent `./gitlab` folder and `./runner` are `root`-owned with mode `700`. GitLab's mounted subfolders are left to GitLab (see *Problems we hit* below).
 - **Secrets out of Git:** `.gitignore` excludes `gitlab/`, `runner/`, `.env`, backups, Terraform state and `terraform.tfvars`.
 - **Containers:** the sample app runs as a non-root user.
 - **Least privilege for automation:** the Azure service principal has Contributor on the subscription only (it can't grant permissions to anyone).
@@ -198,13 +207,54 @@ Git SSH is on **2224** so it never conflicts with the VM's admin SSH on 22.
 - [ ] Keep encrypted backups off the VM (e.g. Azure Blob Storage).
 - [ ] Serve the staging app over HTTPS too (it's a demo app on plain HTTP today).
 
+## Problems we hit — and how we solved them
+
+The first real deployments on Azure surfaced problems that local tests couldn't. Each was reproduced or diagnosed from the logs, fixed, and verified before pushing.
+
+### Setup
+
+| Problem | Cause | Fix |
+|---|---|---|
+| Clone links and redirects pointed to the wrong address | `external_url` was `http://localhost` | Set automatically to the VM's HTTPS DNS name |
+| GitLab's secrets were readable by every VM user | Storage folders were `chmod 777` | Lock the parent `./gitlab` folder to `root:700` |
+| Name clash with the existing VM | The GitLab VM lives in `gitra-rg`, the name Terraform also used | Runner resources renamed `gitra-runner-*`; a Terraform test guards it |
+
+### Azure
+
+| Problem | Cause | Fix |
+|---|---|---|
+| `exceeding approved Total Regional Cores quota` | The subscription allows 4 vCPUs per region and the GitLab VM uses all 4 in East US | Runner VM in another region (quotas are per region) |
+| `SkuNotAvailable` / `Allocation failed` | No capacity for the requested size in the region (common on student subscriptions) | Try several 2-vCPU sizes across 5 regions, first one Azure accepts wins |
+| `already exists` on every later attempt | A failed allocation left a half-created VM outside Terraform's state | Delete leftover VMs and disks before each attempt |
+| The VM was off mid-deployment | Azure auto-shutdown / VM stopped | The workflow starts the VM if needed and retries dropped SSH connections |
+
+### GitLab
+
+| Problem | Cause | Fix |
+|---|---|---|
+| GitLab didn't come back after a VM restart (`Permission denied - puma.rb`, container restart loop) | An earlier `chmod -R 700` / `chown -R root` locked GitLab's internal users (`git`, `gitlab-www`, …) out of their own files | Never lock the mounted subfolders; the deploy detects the problem, reopens the folders (PostgreSQL's stays private), runs `update-permissions` and restarts GitLab |
+| Security settings ran on a half-started GitLab | The health check accepted nginx's `301` redirect, which comes before Rails is up | Check GitLab's own readiness endpoint (`/-/readiness`) inside the container |
+| Container stuck at `unhealthy` even when GitLab worked | Docker's built-in health check doesn't cope with the HTTPS setup | Same readiness endpoint, independent of HTTP vs HTTPS |
+
+### Terraform
+
+| Problem | Cause | Fix |
+|---|---|---|
+| `subnet ... was not found` after moving region | Replacing the resource group deleted the subnet, but a subnet has no region attribute, so Terraform assumed it still existed | `replace_triggered_by` rebuilds the subnet with its VNet (and the NIC/NSG link with the NIC) |
+
+### What we learned
+- **Reproduce before fixing.** The permission bug was recreated on a local GitLab (same `Permission denied`, same restart loop); the repair was verified there before it touched the real VM.
+- **Never trust a single signal.** An HTTP answer, or Docker's health status, isn't proof that the application is ready.
+- **Make every step idempotent.** Re-running the deployment after a failure must be safe — that's what let us fix one problem at a time.
+- **Least privilege has to fit the software.** Locking files down blindly broke GitLab; lock the outer door and let the application manage its own permissions.
+
 ---
 
 ## Member 1 — Azure Infrastructure & Terraform
 
 Terraform manages the runner VM; the GitLab VM already existed and is prepared by the workflow.
 
-**Why two regions:** the subscription allows 4 vCPUs per region, and the GitLab VM (`Standard_D4s_v4`) uses all 4 in East US. Quotas are per region, so the runner VM goes to West US 2 (`RUNNER_LOCATION`). The runner only talks to GitLab over HTTPS, so the distance doesn't matter.
+**Why two regions:** the subscription allows 4 vCPUs per region, and the GitLab VM (`Standard_D4s_v4`) uses all 4 in East US. Quotas are per region, so the runner VM goes to another region — the first of West US 2, Central US, East US 2, West US 3 or North Europe with capacity (`RUNNER_LOCATION` pins one). The runner only talks to GitLab over HTTPS, so the distance doesn't matter.
 
 | Resource | Name | Notes |
 |---|---|---|
@@ -212,7 +262,7 @@ Terraform manages the runner VM; the GitLab VM already existed and is prepared b
 | Virtual network / subnet | `gitra-runner-vnet` / `gitra-runner-subnet` | `10.20.0.0/16` / `10.20.1.0/24` |
 | Public IP | `gitra-runner-pip` | Static |
 | NSG | `gitra-runner-nsg` | 22, 5000 |
-| Runner VM | `gitra-runner-vm` | `Standard_B2s` (2 vCPU, 4 GB), 32 GB Premium SSD, Ubuntu 22.04 |
+| Runner VM | `gitra-runner-vm` | First 2-vCPU size with capacity (currently `Standard_B2s_v2` in West US 2), 32 GB Premium SSD, Ubuntu 22.04 |
 | State storage | `gitra-tfstate-rg` / `gitratf…` | Created by the workflow; keeps Terraform state between runs |
 
 Local checks without Azure: `terraform init -backend=false && terraform validate && terraform test`.
@@ -249,10 +299,12 @@ Local checks without Azure: `terraform init -backend=false && terraform validate
 | `shellcheck` on all scripts, `yamllint`, `docker compose config` | ✅ Pass |
 | `pytest` (sample app) + Docker build/run (`/`, `/health`, non-root user) | ✅ Pass |
 | `remote_deploy_gitlab.sh` against a simulated existing GitLab: data moved to `/opt`, nothing lost, security settings applied | ✅ Pass |
+| Permission repair: reproduced the VM's `chmod -R 700` damage locally (restart loop), repair brings GitLab back (readiness 200, no services down, PostgreSQL data still `700`) | ✅ Pass |
+| `health_check.sh`: waits through a restart, passes only once GitLab is ready | ✅ Pass |
 | `gitlab_bootstrap.rb`: root password, runner token, temporary token | ✅ Pass |
 | Runner deploy + registration + `gitlab-runner verify` | ✅ Pass |
 | `push_demo_app.sh`: project created, app pushed, pipeline started | ✅ Pass |
-| First real run on Azure (Azure CLI steps, Let's Encrypt, full pipeline) | ⏳ Needs the one-time setup |
+| **Full run on Azure:** VM prepared, GitLab over HTTPS, security settings, runner VM created and registered, demo pipeline **test → build → deploy_staging passed** | ✅ Pass |
 
 ## Acceptance Criteria
 
@@ -263,4 +315,4 @@ Local checks without Azure: `terraform init -backend=false && terraform validate
 - [x] A sample CI/CD pipeline is defined and the runner is wired to GitLab (Member 2)
 - [x] The full end-to-end workflow is automated and documented
 - [x] The design reflects enterprise practice (isolated runner, HTTPS, approval + 2FA, least-privilege network)
-- [ ] First automatic deployment run on Azure
+- [x] First automatic deployment run on Azure — end to end, pipeline passed
