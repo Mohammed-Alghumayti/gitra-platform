@@ -1,8 +1,10 @@
 # Fully automatic deployment of the Gitra platform.
 # Every push to Testing (or a manual run) does all of this, end to end:
 #   1. Prepares the existing GitLab VM on Azure (static IP, DNS name, NSG, deploy user)
-#   2. Deploys/updates GitLab on it with HTTPS + security settings
-#   3. Creates/updates the runner VM with Terraform (state kept in Azure Storage)
+#   2. Deploys/updates GitLab on it with HTTPS + security settings, sets root's password
+#   3. Creates/updates the runner VM with Terraform (state kept in Azure Storage).
+#      It lives in another region (RUNNER_LOCATION) because the GitLab VM uses
+#      the whole 4-core quota of its region.
 #   4. Registers the runner with GitLab (only when needed)
 #   5. Pushes sample-app/ to GitLab and waits for its pipeline
 # One-time setup (secrets): see "Automatic deployment" in README.md.
@@ -23,6 +25,7 @@ permissions:
 env:
   GITLAB_VM_IP: ${{ vars.GITLAB_VM_IP || '20.55.88.3' }}
   DNS_LABEL: ${{ vars.DNS_LABEL }}
+  RUNNER_LOCATION: ${{ vars.RUNNER_LOCATION || 'westus2' }}
   DEPLOY_USER: gitra-deploy
   RUNNER_USER: azureuser
   TF_STATE_RG: gitra-tfstate-rg
@@ -86,6 +89,18 @@ jobs:
             "sudo bash -s -- '${{ github.server_url }}/${{ github.repository }}.git' '${{ github.ref_name }}' 'https://${{ steps.vm.outputs.fqdn }}'" \
             < scripts/ci/remote_deploy_gitlab.sh
 
+      - name: "2b. Set root password"
+        if: steps.setup.outputs.ready == 'true'
+        env:
+          GITLAB_ROOT_PASSWORD: ${{ secrets.GITLAB_ROOT_PASSWORD }}
+        run: |
+          OUT=$(bash scripts/ci/run_gitlab_bootstrap.sh 0 1)
+          if grep -q '^ROOT_PASSWORD_UPDATED=1' <<< "$OUT"; then
+            echo "root password updated from the GITLAB_ROOT_PASSWORD secret"
+          else
+            echo "root password already matches the secret"
+          fi
+
       - name: "3a. Terraform state storage"
         id: tfstate
         if: steps.setup.outputs.ready == 'true'
@@ -119,7 +134,7 @@ jobs:
           ARM_TENANT_ID=$(jq -r .tenantId <<< "$AZURE_CREDENTIALS")
           ARM_SUBSCRIPTION_ID=$(jq -r .subscriptionId <<< "$AZURE_CREDENTIALS")
           TF_VAR_subscription_id="$ARM_SUBSCRIPTION_ID"
-          TF_VAR_location="${{ steps.vm.outputs.location }}"
+          TF_VAR_location="$RUNNER_LOCATION"
           TF_VAR_admin_username="$RUNNER_USER"
           TF_VAR_admin_ssh_public_key="$(cat ~/.ssh/gitra.pub)"
           TF_VAR_gitlab_url="https://${{ steps.vm.outputs.fqdn }}"
@@ -158,28 +173,17 @@ jobs:
             echo "need_runner=1" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: "4a. GitLab bootstrap (root password, tokens)"
+      - name: "4a. GitLab tokens (runner + temporary push token)"
         id: boot
         if: steps.setup.outputs.ready == 'true'
         env:
           GITLAB_ROOT_PASSWORD: ${{ secrets.GITLAB_ROOT_PASSWORD }}
         run: |
-          VM="$DEPLOY_USER@$GITLAB_VM_IP"
-          # shellcheck disable=SC2086
-          scp $SSH_OPTS scripts/ci/gitlab_bootstrap.rb "$VM:/tmp/gitlab_bootstrap.rb"
-          # Secrets go through stdin into a root-only env file, never on a command line.
-          # shellcheck disable=SC2086
-          printf 'ROOT_PASSWORD=%s\nNEED_RUNNER=%s\n' "$GITLAB_ROOT_PASSWORD" "${{ steps.runner.outputs.need_runner }}" | \
-            ssh $SSH_OPTS "$VM" "sudo sh -c 'umask 077; cat > /root/gitra-bootstrap.env'"
-          # shellcheck disable=SC2086
-          OUT=$(ssh $SSH_OPTS "$VM" "sudo sh -c 'docker cp /tmp/gitlab_bootstrap.rb gitlab_server:/tmp/gitlab_bootstrap.rb \
-            && docker exec --env-file /root/gitra-bootstrap.env gitlab_server gitlab-rails runner /tmp/gitlab_bootstrap.rb; \
-            rc=\$?; rm -f /root/gitra-bootstrap.env /tmp/gitlab_bootstrap.rb; exit \$rc'")
+          OUT=$(bash scripts/ci/run_gitlab_bootstrap.sh "${{ steps.runner.outputs.need_runner }}" 0)
           PAT=$(grep '^PAT=' <<< "$OUT" | cut -d= -f2-)
           RUNNER_TOKEN=$(grep '^RUNNER_TOKEN=' <<< "$OUT" | cut -d= -f2- || true)
           echo "::add-mask::$PAT"
           [ -z "$RUNNER_TOKEN" ] || echo "::add-mask::$RUNNER_TOKEN"
-          grep -q '^ROOT_PASSWORD_UPDATED=1' <<< "$OUT" && echo "root password updated from secret" || true
           echo "pat=$PAT" >> "$GITHUB_OUTPUT"
           echo "runner_token=$RUNNER_TOKEN" >> "$GITHUB_OUTPUT"
 

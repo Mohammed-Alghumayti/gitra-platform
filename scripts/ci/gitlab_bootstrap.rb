@@ -15,13 +15,15 @@ unless password.empty? || root.valid_password?(password)
   puts 'ROOT_PASSWORD_UPDATED=1'
 end
 
-root.personal_access_tokens.active.where(name: 'gitra-bootstrap').each(&:revoke!)
-pat = root.personal_access_tokens.create!(
-  name: 'gitra-bootstrap',
-  scopes: [:api, :write_repository],
-  expires_at: 1.day.from_now
-)
-puts "PAT=#{pat.token}"
+unless ENV['SKIP_PAT'] == '1'
+  root.personal_access_tokens.active.where(name: 'gitra-bootstrap').each(&:revoke!)
+  pat = root.personal_access_tokens.create!(
+    name: 'gitra-bootstrap',
+    scopes: [:api, :write_repository],
+    expires_at: 1.day.from_now
+  )
+  puts "PAT=#{pat.token}"
+end
 
 if ENV['NEED_RUNNER'] == '1'
   Ci::Runner.where(description: 'gitra-runner').find_each(&:destroy)

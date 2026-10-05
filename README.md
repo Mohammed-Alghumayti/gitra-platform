@@ -33,7 +33,7 @@ An internal GitLab CE platform deployed on Microsoft Azure, built as a 3-person 
    NSG, deploy user       (state in Azure Storage)
           │                    │
           ▼                    ▼
-   GitLab VM  (existing, 20.55.88.3)              Runner VM  (gitra-runner-vm)
+   GitLab VM  (existing, 20.55.88.3, East US)     Runner VM  (gitra-runner-vm, West US 2)
    NSG: 22, 80, 443, 2224                          NSG: 22, 5000
    ┌───────────────────────────┐                   ┌───────────────────────────┐
    │ GitLab CE (Docker)        │ ◄──── HTTPS ───── │ GitLab Runner (Docker)    │
@@ -102,7 +102,7 @@ The first command prints a JSON block; the last one prints a private key. Keep b
 | `SSH_PRIVATE_KEY` | The whole private key from step 1 (`-----BEGIN … END …-----`) |
 | `GITLAB_ROOT_PASSWORD` | A strong password for GitLab's `root` (12+ characters, not a common word) |
 
-Optional, under the **Variables** tab: `GITLAB_VM_IP` (default `20.55.88.3`) and `DNS_LABEL` (default `gitra-<8 chars>`).
+Optional, under the **Variables** tab: `GITLAB_VM_IP` (default `20.55.88.3`), `DNS_LABEL` (default `gitra-<8 chars>`) and `RUNNER_LOCATION` (default `westus2`).
 
 **3. Run it** — **Actions → Deploy Gitra Platform → Run workflow** (or just push to `Testing`).
 
@@ -111,9 +111,9 @@ Optional, under the **Variables** tab: `GITLAB_VM_IP` (default `20.55.88.3`) and
 | Step | What happens |
 |---|---|
 | 1. Prepare GitLab VM | Finds the VM by its IP, starts it if stopped, makes the IP static, adds a free DNS name, opens ports 22/80/443/2224 in its NSG if needed, adds the `gitra-deploy` user with the SSH key |
-| 2. Deploy GitLab | Pulls this branch to `/opt/gitra-platform`, moves any existing GitLab data there (nothing is lost), starts GitLab with HTTPS, applies the security settings |
+| 2. Deploy GitLab | Pulls this branch to `/opt/gitra-platform`, moves any existing GitLab data there (nothing is lost), starts GitLab with HTTPS, applies the security settings, sets `root`'s password from the secret |
 | 3. Runner VM | Terraform creates/updates `gitra-runner-vm` in `gitra-runner-rg` (state kept in Azure Storage, so runs don't duplicate anything) |
-| 4. Bootstrap | Sets `root`'s password from the secret and registers the runner (only when needed) |
+| 4. Runner registration | Registers the runner with GitLab (only when needed) |
 | 5. Demo app | Pushes `sample-app/` to GitLab and waits for its pipeline: **test → build → deploy_staging** |
 
 The run's **Summary** page shows the GitLab URL, the demo project and the staging app URL. Re-running is safe: every step is idempotent.
@@ -203,6 +203,8 @@ Git SSH is on **2224** so it never conflicts with the VM's admin SSH on 22.
 ## Member 1 — Azure Infrastructure & Terraform
 
 Terraform manages the runner VM; the GitLab VM already existed and is prepared by the workflow.
+
+**Why two regions:** the subscription allows 4 vCPUs per region, and the GitLab VM (`Standard_D4s_v4`) uses all 4 in East US. Quotas are per region, so the runner VM goes to West US 2 (`RUNNER_LOCATION`). The runner only talks to GitLab over HTTPS, so the distance doesn't matter.
 
 | Resource | Name | Notes |
 |---|---|---|
