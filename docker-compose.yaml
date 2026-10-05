@@ -5,8 +5,10 @@ services:
     restart: always
     hostname: 'gitlab.local'
     environment:
+      # GITLAB_EXTERNAL_URL comes from .env (written by Terraform's cloud-init
+      # with the VM's public IP). Falls back to the current VM address.
       GITLAB_OMNIBUS_CONFIG: |
-        external_url 'http://20.55.88.3'
+        external_url '${GITLAB_EXTERNAL_URL:-http://20.55.88.3}'
         gitlab_rails['gitlab_shell_ssh_port'] = 2224
     # HOST:CONTAINER — each host port also needs an Azure NSG rule.
     ports:
@@ -22,3 +24,27 @@ services:
       - './gitlab/logs:/var/log/gitlab'
       - './gitlab/data:/var/opt/gitlab'
     shm_size: '256m'
+    networks:
+      gitlab-network:
+        aliases:
+          - gitlab.local
+
+  # Runs the CI/CD jobs. Registered once with scripts/register_runner.sh.
+  gitlab-runner:
+    image: 'gitlab/gitlab-runner:latest'
+    container_name: gitlab-runner
+    restart: always
+    depends_on:
+      - web
+    volumes:
+      - './runner:/etc/gitlab-runner'
+      # Lets jobs build and run images on the host's Docker engine.
+      # SECURITY: this gives CI jobs root-level access to the host — only run
+      # trusted projects on this runner.
+      - '/var/run/docker.sock:/var/run/docker.sock'
+    networks:
+      - gitlab-network
+
+networks:
+  gitlab-network:
+    name: gitlab-network

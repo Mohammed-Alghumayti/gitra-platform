@@ -1,5 +1,21 @@
 # Local GitLab runtime data — contains secrets and user data, never commit this
 gitlab/
+runner/
 
 # Local backup output
 gitlab-backups/
+
+# Local environment overrides (e.g. GITLAB_EXTERNAL_URL)
+.env
+
+# Terraform state and secrets — state holds resource details, tfvars may hold keys
+terraform/.terraform/
+terraform/*.tfstate
+terraform/*.tfstate.*
+terraform/*.tfvars
+terraform/.terraform.lock.hcl
+!terraform/terraform.tfvars.example
+
+# Python
+__pycache__/
+.pytest_cache/

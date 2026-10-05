@@ -1,0 +1,36 @@
+stages:
+  - test
+  - build
+  - deploy
+
+variables:
+  IMAGE_NAME: "internal-demo-app"
+
+test:
+  stage: test
+  image: python:3.12
+  before_script:
+    - pip install -r requirements.txt
+  script:
+    - pytest -v
+
+build:
+  stage: build
+  image: docker:cli
+  script:
+    - echo "Building application..."
+    - docker build -t "$IMAGE_NAME:$CI_COMMIT_SHORT_SHA" -t "$IMAGE_NAME:latest" .
+
+# Runs the built image on the VM as a staging environment (port 5000).
+deploy_staging:
+  stage: deploy
+  image: docker:cli
+  environment:
+    name: staging
+  script:
+    - docker rm -f "$IMAGE_NAME-staging" || true
+    - docker run -d --name "$IMAGE_NAME-staging" --restart unless-stopped -p 5000:5000 "$IMAGE_NAME:$CI_COMMIT_SHORT_SHA"
+    - sleep 3
+    - docker exec "$IMAGE_NAME-staging" python -c "import urllib.request; print(urllib.request.urlopen('http://localhost:5000/health').read().decode())"
+  rules:
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
