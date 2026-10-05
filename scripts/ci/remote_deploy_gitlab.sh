@@ -20,6 +20,10 @@ if ! command -v docker >/dev/null || ! docker compose version >/dev/null 2>&1; t
     curl -fsSL https://get.docker.com | sh
 fi
 
+echo "--- Server status ---"
+free -m | awk 'NR<=2'
+docker ps -a --format '  {{.Names}}: {{.Status}} ({{.Image}})' || true
+
 echo "=== [2/5] Code: $BRANCH → $APP_DIR ==="
 if [ ! -d "$APP_DIR/.git" ]; then
     mkdir -p "$APP_DIR"
