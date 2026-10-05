@@ -1,0 +1,14 @@
+#cloud-config
+# Rendered by Terraform (vm.tf). Runs once on the VM's first boot.
+package_update: true
+packages:
+  - git
+  - curl
+
+runcmd:
+  - curl -fsSL https://get.docker.com | sh
+  - usermod -aG docker ${admin_username}
+  - git clone -b ${repo_branch} ${repo_url} /home/${admin_username}/gitra-platform
+  - echo "GITLAB_EXTERNAL_URL=${external_url}" > /home/${admin_username}/gitra-platform/.env
+  - chown -R ${admin_username}:${admin_username} /home/${admin_username}/gitra-platform
+  - bash /home/${admin_username}/gitra-platform/scripts/deploy.sh

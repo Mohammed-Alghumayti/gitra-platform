@@ -1,0 +1,13 @@
+# Copy to terraform.tfvars and fill in. terraform.tfvars is git-ignored.
+subscription_id = "00000000-0000-0000-0000-000000000000"
+
+location                  = "eastus"
+vm_size                   = "Standard_D2s_v3"
+admin_username            = "azureuser"
+admin_ssh_public_key_path = "~/.ssh/id_rsa.pub"
+
+# Restrict to the team's public IPs, e.g. ["203.0.113.10/32"]
+admin_source_cidrs = ["0.0.0.0/0"]
+user_source_cidrs  = ["0.0.0.0/0"]
+
+repo_branch = "Testing"
