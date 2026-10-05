@@ -45,6 +45,15 @@ run "runner_vm_starts_the_runner_against_gitlab" {
   }
 }
 
+run "never_touches_the_existing_gitlab_resources" {
+  command = apply
+
+  assert {
+    condition     = azurerm_resource_group.main.name == "gitra-runner-rg" && azurerm_linux_virtual_machine.runner.name == "gitra-runner-vm"
+    error_message = "Runner resources must not reuse the existing gitra-rg / gitra-gitlab-vm names."
+  }
+}
+
 run "runner_vm_is_locked_down" {
   command = apply
 

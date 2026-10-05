@@ -18,13 +18,13 @@ variable "location" {
 variable "vnet_address_space" {
   description = "Address space of the runner's virtual network."
   type        = string
-  default     = "10.10.0.0/16"
+  default     = "10.20.0.0/16"
 }
 
 variable "subnet_address_prefix" {
   description = "Address prefix of the runner subnet."
   type        = string
-  default     = "10.10.1.0/24"
+  default     = "10.20.1.0/24"
 }
 
 variable "runner_vm_size" {

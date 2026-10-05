@@ -17,7 +17,7 @@ resource "azurerm_subnet" "main" {
 # Static, so the staging URL never changes. Also gives the VM outbound access
 # (pulling images, reaching GitLab over HTTPS).
 resource "azurerm_public_ip" "runner" {
-  name                = "${local.name}-runner-pip"
+  name                = "${local.name}-pip"
   location            = azurerm_resource_group.main.location
   resource_group_name = azurerm_resource_group.main.name
   allocation_method   = "Static"
@@ -26,7 +26,7 @@ resource "azurerm_public_ip" "runner" {
 }
 
 resource "azurerm_network_interface" "runner" {
-  name                = "${local.name}-runner-nic"
+  name                = "${local.name}-nic"
   location            = azurerm_resource_group.main.location
   resource_group_name = azurerm_resource_group.main.name
   tags                = var.tags

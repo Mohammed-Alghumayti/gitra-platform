@@ -16,7 +16,7 @@ locals {
 }
 
 resource "azurerm_network_security_group" "runner" {
-  name                = "${local.name}-runner-nsg"
+  name                = "${local.name}-nsg"
   location            = azurerm_resource_group.main.location
   resource_group_name = azurerm_resource_group.main.name
   tags                = var.tags

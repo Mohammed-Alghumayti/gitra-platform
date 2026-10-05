@@ -110,9 +110,9 @@ Optional, under the **Variables** tab: `GITLAB_VM_IP` (default `20.55.88.3`) and
 
 | Step | What happens |
 |---|---|
-| 1. Prepare GitLab VM | Finds the VM by its IP, makes the IP static, adds a free DNS name, opens ports 22/80/443/2224 in its NSG if needed, adds the `gitra-deploy` user with the SSH key |
+| 1. Prepare GitLab VM | Finds the VM by its IP, starts it if stopped, makes the IP static, adds a free DNS name, opens ports 22/80/443/2224 in its NSG if needed, adds the `gitra-deploy` user with the SSH key |
 | 2. Deploy GitLab | Pulls this branch to `/opt/gitra-platform`, moves any existing GitLab data there (nothing is lost), starts GitLab with HTTPS, applies the security settings |
-| 3. Runner VM | Terraform creates/updates `gitra-runner-vm` (state kept in Azure Storage, so runs don't duplicate anything) |
+| 3. Runner VM | Terraform creates/updates `gitra-runner-vm` in `gitra-runner-rg` (state kept in Azure Storage, so runs don't duplicate anything) |
 | 4. Bootstrap | Sets `root`'s password from the secret and registers the runner (only when needed) |
 | 5. Demo app | Pushes `sample-app/` to GitLab and waits for its pipeline: **test → build → deploy_staging** |
 
@@ -206,8 +206,8 @@ Terraform manages the runner VM; the GitLab VM already existed and is prepared b
 
 | Resource | Name | Notes |
 |---|---|---|
-| Resource group | `gitra-rg` | Everything for the runner; deleting it never touches the GitLab VM |
-| Virtual network / subnet | `gitra-vnet` / `gitra-subnet` | `10.10.0.0/16` / `10.10.1.0/24` |
+| Resource group | `gitra-runner-rg` | Everything for the runner; kept apart from the existing `gitra-rg` (GitLab VM) |
+| Virtual network / subnet | `gitra-runner-vnet` / `gitra-runner-subnet` | `10.20.0.0/16` / `10.20.1.0/24` |
 | Public IP | `gitra-runner-pip` | Static |
 | NSG | `gitra-runner-nsg` | 22, 5000 |
 | Runner VM | `gitra-runner-vm` | `Standard_B2s` (2 vCPU, 4 GB), 32 GB Premium SSD, Ubuntu 22.04 |

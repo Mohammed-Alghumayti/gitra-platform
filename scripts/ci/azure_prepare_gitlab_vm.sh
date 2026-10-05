@@ -26,6 +26,15 @@ LOCATION=$(az vm show --ids "$VM_ID" --query location -o tsv)
 VM_SIZE=$(az vm show --ids "$VM_ID" --query hardwareProfile.vmSize -o tsv)
 echo "✅ VM: $VM_NAME (resource group $VM_RG, $LOCATION, size $VM_SIZE)"
 
+# The VM must be running to add the deploy user and to deploy GitLab.
+POWER=$(az vm get-instance-view -g "$VM_RG" -n "$VM_NAME" \
+    --query "instanceView.statuses[?starts_with(code, 'PowerState/')].code | [0]" -o tsv)
+if [ "$POWER" != "PowerState/running" ]; then
+    echo "VM is ${POWER#PowerState/} — starting it..."
+    az vm start -g "$VM_RG" -n "$VM_NAME" -o none
+    echo "✅ VM started."
+fi
+
 echo "=== [2/5] Static IP + DNS name ==="
 if [ "$(az network public-ip show --ids "$PIP_ID" --query publicIPAllocationMethod -o tsv)" != "Static" ]; then
     az network public-ip update --ids "$PIP_ID" --allocation-method Static -o none

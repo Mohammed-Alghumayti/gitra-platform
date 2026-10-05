@@ -1,6 +1,6 @@
 # Runner VM: CI jobs + staging app, isolated from GitLab's data and secrets.
 resource "azurerm_linux_virtual_machine" "runner" {
-  name                  = "${local.name}-runner-vm"
+  name                  = "${local.name}-vm"
   location              = azurerm_resource_group.main.location
   resource_group_name   = azurerm_resource_group.main.name
   size                  = var.runner_vm_size
