@@ -102,7 +102,7 @@ The first command prints a JSON block; the last one prints a private key. Keep b
 | `SSH_PRIVATE_KEY` | The whole private key from step 1 (`-----BEGIN … END …-----`) |
 | `GITLAB_ROOT_PASSWORD` | A strong password for GitLab's `root` (12+ characters, not a common word) |
 
-Optional, under the **Variables** tab: `GITLAB_VM_IP` (default `20.55.88.3`), `DNS_LABEL` (default `gitra-<8 chars>`) and `RUNNER_LOCATION` (default `westus2`).
+Optional, under the **Variables** tab: `GITLAB_VM_IP` (default `20.55.88.3`), `DNS_LABEL` (default `gitra-<8 chars>`) `RUNNER_LOCATION` (default `westus2`) and `RUNNER_VM_SIZE` (default: the first available of several small 2-vCPU sizes).
 
 **3. Run it** — **Actions → Deploy Gitra Platform → Run workflow** (or just push to `Testing`).
 

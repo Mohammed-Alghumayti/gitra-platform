@@ -26,6 +26,7 @@ env:
   GITLAB_VM_IP: ${{ vars.GITLAB_VM_IP || '20.55.88.3' }}
   DNS_LABEL: ${{ vars.DNS_LABEL }}
   RUNNER_LOCATION: ${{ vars.RUNNER_LOCATION || 'westus2' }}
+  RUNNER_VM_SIZE: ${{ vars.RUNNER_VM_SIZE }}
   DEPLOY_USER: gitra-deploy
   RUNNER_USER: azureuser
   TF_STATE_RG: gitra-tfstate-rg
@@ -156,7 +157,23 @@ jobs:
             -backend-config="storage_account_name=${{ steps.tfstate.outputs.account }}" \
             -backend-config="container_name=tfstate" \
             -backend-config="key=gitra-runner.tfstate"
-          terraform apply -input=false -auto-approve
+          # Small 2-vCPU sizes, tried in order: student subscriptions often lack
+          # capacity for a given size in a region (SkuNotAvailable).
+          # RUNNER_VM_SIZE (repo variable) pins one size instead.
+          SIZES="${RUNNER_VM_SIZE:-Standard_B2s Standard_B2als_v2 Standard_B2as_v2 Standard_B2s_v2 Standard_D2as_v5 Standard_D2s_v5 Standard_D2s_v3}"
+          applied=""
+          for size in $SIZES; do
+            echo "--- Trying runner size $size in $RUNNER_LOCATION ---"
+            if terraform apply -input=false -auto-approve -var "runner_vm_size=$size"; then
+              applied="$size"
+              break
+            fi
+          done
+          if [ -z "$applied" ]; then
+            echo "::error::No runner size available in $RUNNER_LOCATION. Set the RUNNER_LOCATION variable to another region (e.g. centralus, northeurope)."
+            exit 1
+          fi
+          echo "✅ Runner VM size: $applied"
           echo "runner_ip=$(terraform output -raw runner_public_ip)" >> "$GITHUB_OUTPUT"
           echo "staging_url=$(terraform output -raw staging_app_url)" >> "$GITHUB_OUTPUT"
 
