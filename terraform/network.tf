@@ -12,6 +12,12 @@ resource "azurerm_subnet" "main" {
   resource_group_name  = azurerm_resource_group.main.name
   virtual_network_name = azurerm_virtual_network.main.name
   address_prefixes     = [var.subnet_address_prefix]
+
+  # A subnet has no region of its own: when the VNet is rebuilt (e.g. a new
+  # RUNNER_LOCATION), rebuild the subnet too instead of assuming it survived.
+  lifecycle {
+    replace_triggered_by = [azurerm_virtual_network.main]
+  }
 }
 
 # Static, so the staging URL never changes. Also gives the VM outbound access

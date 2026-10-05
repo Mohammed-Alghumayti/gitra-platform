@@ -40,4 +40,9 @@ resource "azurerm_network_security_group" "runner" {
 resource "azurerm_network_interface_security_group_association" "runner" {
   network_interface_id      = azurerm_network_interface.runner.id
   network_security_group_id = azurerm_network_security_group.runner.id
+
+  # Re-attach whenever the NIC or NSG is rebuilt (their IDs keep the same name).
+  lifecycle {
+    replace_triggered_by = [azurerm_network_interface.runner, azurerm_network_security_group.runner]
+  }
 }
