@@ -1,3 +1,5 @@
+# GitLab server (runs on the GitLab VM). The CI runner lives on its own VM —
+# see docker-compose.runner.yaml.
 services:
   web:
     image: 'gitlab/gitlab-ce:latest'
@@ -5,16 +7,17 @@ services:
     restart: always
     hostname: 'gitlab.local'
     environment:
-      # GITLAB_EXTERNAL_URL comes from .env (written by Terraform's cloud-init
-      # with the VM's public IP). Falls back to the current VM address.
+      # GITLAB_EXTERNAL_URL comes from .env (written by Terraform's cloud-init).
+      # With an https:// URL GitLab requests a Let's Encrypt certificate
+      # automatically and redirects HTTP to HTTPS.
       GITLAB_OMNIBUS_CONFIG: |
         external_url '${GITLAB_EXTERNAL_URL:-http://20.55.88.3}'
         gitlab_rails['gitlab_shell_ssh_port'] = 2224
     # HOST:CONTAINER — each host port also needs an Azure NSG rule.
     ports:
-      # Web UI over HTTP. Not encrypted until HTTPS is enabled.
+      # HTTP: only redirects to HTTPS and answers Let's Encrypt challenges.
       - '80:80'
-      # Reserved for HTTPS; unused until external_url is set to https://.
+      # HTTPS: the GitLab web UI, encrypted.
       - '443:443'
       # Git over SSH. Host port 22 is kept for the VM's admin SSH, so Git
       # traffic is separated from server access. Must match gitlab_shell_ssh_port.
@@ -24,27 +27,3 @@ services:
       - './gitlab/logs:/var/log/gitlab'
       - './gitlab/data:/var/opt/gitlab'
     shm_size: '256m'
-    networks:
-      gitlab-network:
-        aliases:
-          - gitlab.local
-
-  # Runs the CI/CD jobs. Registered once with scripts/register_runner.sh.
-  gitlab-runner:
-    image: 'gitlab/gitlab-runner:latest'
-    container_name: gitlab-runner
-    restart: always
-    depends_on:
-      - web
-    volumes:
-      - './runner:/etc/gitlab-runner'
-      # Lets jobs build and run images on the host's Docker engine.
-      # SECURITY: this gives CI jobs root-level access to the host — only run
-      # trusted projects on this runner.
-      - '/var/run/docker.sock:/var/run/docker.sock'
-    networks:
-      - gitlab-network
-
-networks:
-  gitlab-network:
-    name: gitlab-network

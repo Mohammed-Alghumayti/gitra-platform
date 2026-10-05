@@ -4,9 +4,9 @@
 
 # Gitra Platform — Internal Git & CI/CD Platform on Azure
 
-An internal GitLab CE platform deployed on Microsoft Azure, built as a 3-person bootcamp project. The platform gives the team a single place for source control, code review, and CI/CD pipelines.
+An internal GitLab CE platform deployed on Microsoft Azure, built as a 3-person bootcamp project. The platform gives the team a single place for source control, code review, and CI/CD pipelines — publicly reachable, so supervisors and other students can use it, with security built in.
 
-**Live environment:** `http://20.55.88.3` "for Now" (Azure VM, Ubuntu 22.04 LTS)
+**Live environment:** `http://20.55.88.3` "for Now" (Azure VM, Ubuntu 22.04 LTS). After `terraform apply`: `https://<dns_label>.<location>.cloudapp.azure.com`.
 
 ## Team & Workstreams
 
@@ -14,58 +14,55 @@ An internal GitLab CE platform deployed on Microsoft Azure, built as a 3-person 
 |---|---|---|---|
 | **Member 1** — Nasser | Azure Infrastructure & Terraform | `terraform/` | ✅ Complete |
 | **Member 2** — Faisal | GitLab & CI/CD Configuration | `sample-app/`, runner | ✅ Complete |
-| **Member 3** — Mohammed | Docker, Bash Automation & Operations | `docker-compose.yaml`, `scripts/` | ✅ Complete |
+| **Member 3** — Mohammed | Docker, Bash Automation & Operations | `docker-compose*.yaml`, `scripts/` | ✅ Complete |
 
 ---
 
 ## Architecture Overview
 
 ```
-             INFRASTRUCTURE
-                  │
-            Terraform   (Member 1)      → Resource Group, VNet, NSG, Static IP, VM
-                  │
-                  ▼
-              Azure VM   (Ubuntu 22.04, cloud-init runs deploy.sh on first boot)
-                  │
-                  ▼
-      Docker + Bash Automation   (Member 3)
-                  │
-                  ▼
-     GitLab CE  ◄── gitlab-network ──►  GitLab Runner
-                  │
-          SOFTWARE DELIVERY
-                  │
-       CI/CD Pipeline   (Member 2)      → test → build → deploy (staging :5000)
+                         INFRASTRUCTURE — Terraform (Member 1)
+                Resource Group · VNet · 2 NSGs · 2 Static IPs · 2 VMs
+                                       │
+             ┌─────────────────────────┴─────────────────────────┐
+             ▼                                                   ▼
+   GitLab VM  (Standard_D2s_v3)                        Runner VM  (Standard_B2s)
+   NSG: 22, 80, 443, 2224                              NSG: 22, 5000
+   ┌───────────────────────────┐                       ┌───────────────────────────┐
+   │ GitLab CE (Docker)        │ ◄──── HTTPS ───────── │ GitLab Runner (Docker)    │
+   │ HTTPS · Let's Encrypt     │   jobs + clone        │ CI jobs: test → build     │
+   │ data + secrets live here  │                       │ staging app :5000         │
+   └───────────────────────────┘                       └───────────────────────────┘
+        Docker + Bash Automation (Member 3)               CI/CD Pipeline (Member 2)
 ```
 
 ## Repository layout
 
 ```
 gitra-platform/
-├── terraform/                  # Member 1 — Azure infrastructure
-│   ├── providers.tf             # azurerm provider
-│   ├── variables.tf             # Inputs (region, VM size, allowed IPs, repo branch…)
-│   ├── main.tf                  # Resource group
-│   ├── network.tf               # VNet, subnet, static public IP, NIC
-│   ├── security.tf              # NSG + rules
-│   ├── vm.tf                    # Ubuntu 22.04 VM (SSH keys only)
-│   ├── cloud-init.yaml.tftpl    # First boot: Docker → clone repo → deploy.sh
-│   ├── outputs.tf               # IP, GitLab URL, SSH command
-│   └── terraform.tfvars.example
-├── docker-compose.yaml         # Member 3 — GitLab CE + GitLab Runner
-├── .env.example                # GITLAB_EXTERNAL_URL (cloud-init writes .env)
-├── scripts/                    # Member 3
-│   ├── setup.sh                 # Installs Docker (manual install path)
-│   ├── deploy.sh                # Creates storage folders and launches the stack
-│   ├── health_check.sh          # Waits for GitLab to become reachable
-│   ├── register_runner.sh       # Registers the runner with GitLab (once)
-│   └── backup.sh                # Creates and exports a GitLab backup
-├── sample-app/                 # Member 2 — demo Flask app + pipeline
-│   ├── app.py, test_app.py, requirements.txt, Dockerfile
-│   └── .gitlab-ci.yml           # test → build → deploy_staging
-├── docs/images/                # Logo
-└── gitlab/, runner/            # Runtime data on the VM (git-ignored)
+├── terraform/                     # Member 1 — Azure infrastructure
+│   ├── providers.tf, variables.tf, main.tf
+│   ├── network.tf                  # VNet, subnet, 2 static public IPs (+ DNS name), 2 NICs
+│   ├── security.tf                 # One NSG per VM, minimal ports
+│   ├── vm.tf                       # GitLab VM + runner VM (SSH keys only)
+│   ├── cloud-init-gitlab.yaml.tftpl  # Docker, fail2ban, deploy, health check, hardening
+│   ├── cloud-init-runner.yaml.tftpl  # Docker, fail2ban, start runner
+│   ├── outputs.tf                  # URLs, IPs, SSH commands
+│   ├── terraform.tfvars.example
+│   └── tests/plan.tftest.hcl       # `terraform test` with a mocked Azure provider
+├── docker-compose.yaml            # Member 3 — GitLab CE (GitLab VM)
+├── docker-compose.runner.yaml     # GitLab Runner (runner VM)
+├── .env.example                   # GITLAB_EXTERNAL_URL (cloud-init writes .env)
+├── scripts/                       # Member 3
+│   ├── setup.sh                    # Installs Docker (manual install path)
+│   ├── deploy.sh                   # GitLab VM: storage folders + launch GitLab
+│   ├── health_check.sh             # Waits for GitLab to become reachable
+│   ├── harden_gitlab.sh            # Sign-up approval, mandatory 2FA, password policy
+│   ├── deploy_runner.sh            # Runner VM: launch the runner
+│   ├── register_runner.sh          # Runner VM: register with GitLab (once)
+│   └── backup.sh                   # Creates and exports a GitLab backup
+├── sample-app/                    # Member 2 — demo Flask app + pipeline
+└── docs/images/                   # Logo
 ```
 
 ---
@@ -74,60 +71,105 @@ gitra-platform/
 
 ### 1. Provision Azure (Terraform)
 
-Requires [Terraform](https://developer.hashicorp.com/terraform/install) ≥ 1.5, the Azure CLI (`az login`) and an SSH key pair.
+Requires [Terraform](https://developer.hashicorp.com/terraform/install) ≥ 1.7, the Azure CLI (`az login`) and an SSH key pair.
 
 ```bash
 cd terraform
-cp terraform.tfvars.example terraform.tfvars   # set subscription_id and your IPs
+cp terraform.tfvars.example terraform.tfvars   # set subscription_id and a unique dns_label
 terraform init
+terraform test                                 # optional: checks the config without Azure
 terraform plan
 terraform apply
 ```
 
-Outputs give you `gitlab_url`, `ssh_command` and `public_ip`. On first boot, cloud-init installs Docker, clones this repo (`repo_branch`, default `Testing`), writes `.env` with the VM's IP, and runs `deploy.sh`. The repo must be public for the clone to work (or change `repo_url`).
+On first boot (~10 minutes), cloud-init does everything on both VMs: installs Docker and fail2ban, clones this repo, starts GitLab with HTTPS (Let's Encrypt), applies the security settings, and starts the runner.
 
-### 2. Wait for GitLab
+### 2. Log in to GitLab
+
+Open the `gitlab_url` output. Get the initial `root` password (expires after 24h — change it and set up 2FA right away):
 
 ```bash
-ssh azureuser@<public_ip>
-cd ~/gitra-platform
-./scripts/health_check.sh          # polls every 10s, 5 min default timeout
-sudo docker exec -it gitlab_server grep 'Password:' /etc/gitlab/initial_root_password
+ssh azureuser@<gitlab_public_ip>
+sudo docker exec gitlab_server grep 'Password:' /etc/gitlab/initial_root_password
 ```
-
-Open `http://<public_ip>` and log in as `root` (the generated password expires after 24h).
 
 ### 3. Register the runner (once)
 
-In GitLab: **Admin → CI/CD → Runners → New instance runner** (tick *Run untagged jobs*), copy the `glrt-…` token, then:
+In GitLab: **Admin → CI/CD → Runners → New instance runner** (tick *Run untagged jobs*), copy the `glrt-…` token, then on the **runner VM**:
 
 ```bash
-./scripts/register_runner.sh <glrt-token>
+ssh azureuser@<runner_public_ip>
+cd ~/gitra-platform && ./scripts/register_runner.sh <glrt-token>
 ```
 
 ### 4. Run the pipeline
 
-Create a project in GitLab and push the contents of `sample-app/` to it. The pipeline runs **test → build → deploy_staging**, and the app is served at `http://<public_ip>:5000`. See [`sample-app/README.md`](sample-app/README.md).
+Create a project in GitLab and push the contents of `sample-app/` to it. The pipeline runs **test → build → deploy_staging**, and the app is served at the `staging_app_url` output. See [`sample-app/README.md`](sample-app/README.md).
 
-### Manual install (existing VM, no Terraform)
+### 5. Invite people
 
-```bash
-git clone -b Testing https://github.com/Mohammed-Alghumayti/gitra-platform.git
-cd gitra-platform
-chmod +x scripts/*.sh
-./scripts/setup.sh && newgrp docker
-cp .env.example .env               # set GITLAB_EXTERNAL_URL to the VM's address
-./scripts/deploy.sh
-./scripts/health_check.sh
-```
-
-> Changing `GITLAB_EXTERNAL_URL` needs `docker compose down && docker compose up -d` — a restart does not re-read it.
+Supervisors and students open the GitLab URL and click **Register**. Their account stays pending until an admin approves it (**Admin → Users → Pending approval**). On first login they must set up 2FA.
 
 ### Backups
 
 ```bash
-./scripts/backup.sh [destination_dir]    # default: ~/gitlab-backups
+./scripts/backup.sh [destination_dir]    # on the GitLab VM, default: ~/gitlab-backups
 ```
+
+---
+
+## Security decisions
+
+Two risks came up while designing the platform. This is how each one is solved.
+
+### Problem 1 — CI jobs could take over the GitLab server
+
+**Risk:** the runner needs the Docker socket (`/var/run/docker.sock`) so jobs can `docker build` and run the staging app. Whoever controls Docker controls the machine, so any `.gitlab-ci.yml` could read GitLab's secrets or delete its data if the runner shared GitLab's VM.
+
+**Solution: the runner has its own VM.**
+- Terraform creates a separate `gitra-runner-vm`; GitLab and the runner are split into `docker-compose.yaml` and `docker-compose.runner.yaml`.
+- The runner talks to GitLab only over HTTPS, like any user. GitLab's data and secrets are not on the runner VM.
+- Worst case, a malicious job compromises the runner VM — it can be rebuilt with `terraform apply` while GitLab is unaffected.
+
+### Problem 2 — The site must be public, but safely
+
+**Risk:** supervisors and other students need to reach GitLab, so we can't restrict it to the team's IPs. But a public site on plain HTTP exposes passwords, and open sign-up lets anyone create accounts and run CI jobs.
+
+**Solution: public, with protection at every layer.**
+
+| Layer | Protection | Where |
+|---|---|---|
+| Encryption | HTTPS with a free Let's Encrypt certificate on a free Azure DNS name; HTTP redirects to HTTPS | `network.tf` (`dns_label`), `docker-compose.yaml` |
+| Accounts | Anyone can register, but an admin must approve each account | `harden_gitlab.sh` |
+| Login | 2FA mandatory for every user (48h grace period); minimum 12-character passwords | `harden_gitlab.sh` |
+| Code visibility | Projects can't be made public — code is visible to signed-in users only | `harden_gitlab.sh` |
+| Brute force | GitLab's built-in rate limiting on logins; fail2ban on admin SSH | GitLab default, cloud-init |
+| Server access | SSH keys only, no passwords, on both VMs | `vm.tf` |
+| Network | Each VM opens only the ports it needs | `security.tf` |
+
+### Network Security Group (NSG) rules
+
+| VM | Rule | Port | Purpose |
+|---|---|---|---|
+| GitLab | Allow-SSH-Admin | 22 | Server administration (keys only + fail2ban) |
+| GitLab | Allow-HTTP | 80 | Redirect to HTTPS + Let's Encrypt validation |
+| GitLab | Allow-HTTPS | 443 | GitLab web interface |
+| GitLab | Allow-GitLab-SSH | 2224 | Git clone / push / pull over SSH |
+| Runner | Allow-SSH-Admin | 22 | Server administration (keys only + fail2ban) |
+| Runner | Allow-Staging-App | 5000 | Sample app deployed by the pipeline |
+
+Git SSH is on **2224** so it never conflicts with the VM's admin SSH on 22. Sources are public by default (`user_source_cidrs`); admin SSH can optionally be narrowed with `admin_source_cidrs`.
+
+### Other measures
+- **Permissions:** `./gitlab` and `./runner` are `root`-owned with mode `700`.
+- **Secrets out of Git:** `.gitignore` excludes `gitlab/`, `runner/`, `.env`, backups, Terraform state and `terraform.tfvars`.
+- **Containers:** the sample app runs as a non-root user.
+- **Backups:** `backup.sh` also exports `gitlab-secrets.json` and `gitlab.rb`; treat the backup folder as sensitive.
+
+### Still to do
+- [ ] Pin the GitLab and runner image versions instead of `latest`.
+- [ ] Keep encrypted backups off the VM (e.g. Azure Blob Storage), and store Terraform state remotely.
+- [ ] Serve the staging app over HTTPS too (it's a demo app on plain HTTP today).
 
 ---
 
@@ -135,31 +177,18 @@ cp .env.example .env               # set GITLAB_EXTERNAL_URL to the VM's address
 
 | Resource | Name | Notes |
 |---|---|---|
-| Resource group | `gitra-rg` | Everything lives here; `terraform destroy` removes it all |
+| Resource group | `gitra-rg` | `terraform destroy` removes everything |
 | Virtual network / subnet | `gitra-vnet` / `gitra-subnet` | `10.10.0.0/16` / `10.10.1.0/24` |
-| Public IP | `gitra-pip` | **Static**, so `external_url` and clone links never change |
-| NSG | `gitra-nsg` | Attached to the subnet, rules below |
-| VM | `gitra-vm` | `Standard_D2s_v3` (2 vCPU, 8 GB), 64 GB Premium SSD, Ubuntu 22.04 |
+| Public IPs | `gitra-gitlab-pip`, `gitra-runner-pip` | Static; GitLab's has the DNS name used for HTTPS |
+| NSGs | `gitra-gitlab-nsg`, `gitra-runner-nsg` | One per VM, attached to its NIC |
+| GitLab VM | `gitra-gitlab-vm` | `Standard_D2s_v3` (2 vCPU, 8 GB), 64 GB Premium SSD |
+| Runner VM | `gitra-runner-vm` | `Standard_B2s` (2 vCPU, 4 GB), 32 GB Premium SSD |
 
-All names use the `project_name` prefix (default `gitra`). Key variables: `location`, `vm_size`, `admin_source_cidrs`, `user_source_cidrs`, `repo_branch`.
-
-### Network Security Group (NSG) rules
-
-| Rule | Port | Allowed from | Purpose |
-|---|---|---|---|
-| Allow-SSH-Admin | 22 | `admin_source_cidrs` | Remote server administration |
-| Allow-HTTP | 80 | `user_source_cidrs` | GitLab web interface |
-| Allow-HTTPS | 443 | `user_source_cidrs` | Future encrypted connection (SSL/TLS) |
-| Allow-GitLab-SSH | 2224 | `user_source_cidrs` | Git clone / push / pull over SSH |
-| Allow-Staging-App | 5000 | `user_source_cidrs` | Sample app deployed by the pipeline |
-
-The internal Git SSH port is mapped to **2224** instead of 22, to avoid conflicting with the VM's own administrative SSH port.
-
----
+Both VMs run Ubuntu 22.04. Names use the `project_name` prefix (default `gitra`). Key variables: `location`, `dns_label`, `vm_size`, `runner_vm_size`, `repo_branch`.
 
 ## Member 2 — GitLab & CI/CD
 
-- **Runner:** `gitlab-runner` container in `docker-compose.yaml`, Docker executor, on the same `gitlab-network` as GitLab. Jobs clone from `http://gitlab_server` internally, so they don't depend on the public IP.
+- **Runner:** `gitlab-runner` container on the runner VM, Docker executor, registered with `register_runner.sh`.
 - **Sample app:** a Flask app with `/` and `/health`, unit-tested with pytest, packaged with a non-root Dockerfile.
 - **Pipeline (`sample-app/.gitlab-ci.yml`):**
 
@@ -167,61 +196,34 @@ The internal Git SSH port is mapped to **2224** instead of 22, to avoid conflict
 |---|---|---|
 | test | `test` | `pip install` + `pytest` |
 | build | `build` | `docker build`, tagged with the commit SHA |
-| deploy | `deploy_staging` | Replaces the `internal-demo-app-staging` container on port 5000 and checks `/health` (default branch only) |
-
----
+| deploy | `deploy_staging` | Replaces the `internal-demo-app-staging` container on port 5000 of the runner VM and checks `/health` (default branch only) |
 
 ## Member 3 — Docker, Bash Automation & Operations
 
-Deploys GitLab CE and the runner as Docker containers with persistent bind-mounted storage, plus the scripts to install, deploy, health-check, register the runner and back up.
+| VM | Volume (host) | Container path | Contents |
+|---|---|---|---|
+| GitLab | `./gitlab/config` | `/etc/gitlab` | Configuration, secrets, certificates |
+| GitLab | `./gitlab/logs` | `/var/log/gitlab` | Logs |
+| GitLab | `./gitlab/data` | `/var/opt/gitlab` | Databases and repositories |
+| Runner | `./runner` | `/etc/gitlab-runner` | Runner config + token |
 
-| Volume (host) | Container path | Contents |
-|---|---|---|
-| `./gitlab/config` | `/etc/gitlab` | Configuration, secrets, certificates |
-| `./gitlab/logs` | `/var/log/gitlab` | Logs |
-| `./gitlab/data` | `/var/opt/gitlab` | Databases and repositories |
-| `./runner` | `/etc/gitlab-runner` | Runner config + token |
-
----
-
-## Security
-
-**In place**
-- **Network:** only ports 22, 80, 443, 2224 and 5000 are open, each through its own NSG rule, with configurable source IPs.
-- **SSH separation:** Git uses 2224 and admin SSH uses 22, so each can be restricted on its own.
-- **VM login:** SSH keys only; password authentication is disabled by Terraform.
-- **Permissions:** `./gitlab` and `./runner` are `root`-owned with mode `700`, so other VM users can't read GitLab's secrets.
-- **Secrets out of Git:** `.gitignore` excludes `gitlab/`, `runner/`, `.env`, backups, Terraform state and `terraform.tfvars`.
-- **Containers:** the sample app runs as a non-root user.
-- **Backups:** `backup.sh` also exports `gitlab-secrets.json` and `gitlab.rb`; treat the backup folder as sensitive.
-- **Root password:** the generated one expires after 24h. Change it on first login.
-
-**To do before real use**
-- [ ] Enable HTTPS: set `GITLAB_EXTERNAL_URL=https://<domain>` and `letsencrypt['enable'] = true`. Port 80 is plaintext today.
-- [ ] Set `admin_source_cidrs` / `user_source_cidrs` to the team's IPs (defaults allow everyone).
-- [ ] Disable public sign-up and enforce 2FA (Admin → Settings → General).
-- [ ] Pin the GitLab and runner image versions instead of `latest`.
-- [ ] The runner mounts the Docker socket, which gives CI jobs root-level access to the VM — only run trusted projects on it.
-- [ ] Keep encrypted backups off the VM (e.g. Azure Blob Storage), and store Terraform state remotely.
+Changing `GITLAB_EXTERNAL_URL` needs `docker compose down && docker compose up -d` — a restart does not re-read it.
 
 ---
 
 ## Testing
 
-What was verified for this branch:
-
 | Check | Result |
 |---|---|
-| `terraform fmt -check`, `terraform init`, `terraform validate` | ✅ Pass |
-| cloud-init template renders to valid YAML | ✅ Pass |
-| `shellcheck scripts/*.sh` | ✅ Pass |
-| `yamllint` + `docker compose config` | ✅ Pass |
-| `pytest` (sample app) | ✅ 2 passed |
-| Docker build + run of the sample app (`/`, `/health`, non-root user) | ✅ Pass |
-| `deploy.sh` → `health_check.sh` (GitLab up in ~3 min, folders `700 root`) | ✅ Pass |
-| `register_runner.sh` + `gitlab-runner verify` | ✅ Pass |
+| `terraform fmt -check`, `init`, `validate` | ✅ Pass |
+| `terraform test` (mocked Azure: separate VMs, HTTPS URL, hardening in cloud-init, SSH keys only, exact NSG ports) | ✅ 3 passed |
+| Both cloud-init templates render to valid YAML | ✅ Pass |
+| `shellcheck scripts/*.sh`, `yamllint`, `docker compose config` (both files) | ✅ Pass |
+| `pytest` (sample app) + Docker build/run (`/`, `/health`, non-root user) | ✅ Pass |
+| `deploy.sh` → `health_check.sh` → `harden_gitlab.sh` on a real GitLab container | ✅ Pass |
+| `deploy_runner.sh` → `register_runner.sh` → `gitlab-runner verify` | ✅ Pass |
 | `.gitlab-ci.yml` via GitLab CI Lint, pipeline picked up by the runner | ✅ Pass |
-| `terraform apply` on Azure and a full pipeline run | ⏳ To run on Azure (needs Azure credentials and internet for job images) |
+| `terraform apply`, Let's Encrypt certificate, full pipeline run | ⏳ To run on Azure |
 
 ## Acceptance Criteria
 
@@ -231,5 +233,5 @@ What was verified for this branch:
 - [x] Azure infrastructure is defined with Terraform (Member 1)
 - [x] A sample CI/CD pipeline is defined and the runner is wired to GitLab (Member 2)
 - [x] The full end-to-end workflow is documented
+- [x] The design reflects enterprise practice (isolated runner, HTTPS, approval + 2FA, least-privilege network)
 - [ ] Infrastructure applied on Azure and a pipeline run demonstrated end to end
-- [ ] Items under **Security → To do** are closed

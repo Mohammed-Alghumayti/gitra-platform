@@ -10,7 +10,8 @@ echo "=== Checking GitLab Container Status ==="
 
 while [ "$ELAPSED" -lt "$MAX_WAIT" ]; do
     STATUS_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:80 || echo "000")
-    if [ "$STATUS_CODE" -eq 200 ] || [ "$STATUS_CODE" -eq 302 ]; then
+    # 301 = redirect to HTTPS, 302 = redirect to the sign-in page.
+    if [ "$STATUS_CODE" -eq 200 ] || [ "$STATUS_CODE" -eq 301 ] || [ "$STATUS_CODE" -eq 302 ]; then
         echo "✅ GitLab is UP and healthy! (HTTP Status: $STATUS_CODE)"
         exit 0
     fi

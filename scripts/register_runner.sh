@@ -1,27 +1,31 @@
 #!/bin/bash
-# Registers the gitlab-runner container with GitLab (run once after deploy).
-# Usage: ./scripts/register_runner.sh <runner_token>
-#   Get the token in GitLab: Admin → CI/CD → Runners → New instance runner
-#   (tick "Run untagged jobs"). It starts with "glrt-".
+# Registers the gitlab-runner container with GitLab (run once, on the runner VM).
+# Usage: ./scripts/register_runner.sh <runner_token> [gitlab_url]
+#   Token: GitLab → Admin → CI/CD → Runners → New instance runner
+#          (tick "Run untagged jobs"). It starts with "glrt-".
+#   URL:   defaults to GITLAB_EXTERNAL_URL from .env (written by cloud-init).
 set -e
 
+cd "$(dirname "$0")/.."
+
 TOKEN="$1"
-if [ -z "$TOKEN" ]; then
-    echo "❌ Usage: $0 <runner_token>"
+GITLAB_URL="$2"
+if [ -z "$GITLAB_URL" ] && [ -f .env ]; then
+    GITLAB_URL=$(grep '^GITLAB_EXTERNAL_URL=' .env | cut -d= -f2-)
+fi
+if [ -z "$TOKEN" ] || [ -z "$GITLAB_URL" ]; then
+    echo "❌ Usage: $0 <runner_token> [gitlab_url]"
     exit 1
 fi
 
-echo "=== Registering GitLab Runner (docker executor) ==="
-# Jobs reach GitLab over the internal gitlab-network, so they don't depend on
-# the public IP. The Docker socket is shared so jobs can build/run images.
+echo "=== Registering GitLab Runner with $GITLAB_URL (docker executor) ==="
+# The Docker socket is shared so jobs can build/run images on this VM.
 docker exec gitlab-runner gitlab-runner register \
     --non-interactive \
-    --url "http://gitlab_server" \
-    --clone-url "http://gitlab_server" \
+    --url "$GITLAB_URL" \
     --token "$TOKEN" \
     --executor "docker" \
     --docker-image "docker:cli" \
-    --docker-network-mode "gitlab-network" \
     --docker-volumes "/var/run/docker.sock:/var/run/docker.sock"
 
 echo "✅ Runner registered. Check it in GitLab under Admin → CI/CD → Runners."

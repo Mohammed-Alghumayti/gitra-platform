@@ -14,15 +14,15 @@ fi
 echo "✅ Found Docker Compose file."
 
 echo "=== [2/3] Creating Persistent Storage Directories ==="
-mkdir -p ./gitlab/config ./gitlab/logs ./gitlab/data ./runner
+mkdir -p ./gitlab/config ./gitlab/logs ./gitlab/data
 # SECURITY FIX: 700 (owner-only) instead of 777.
 # Only the top-level folders are locked down: that already blocks other VM
 # users from reaching anything inside. GitLab manages the permissions of its
 # own files, so they are deliberately not changed recursively.
-sudo chown root:root ./gitlab ./gitlab/config ./gitlab/logs ./gitlab/data ./runner
-sudo chmod 700 ./gitlab ./gitlab/config ./gitlab/logs ./gitlab/data ./runner
+sudo chown root:root ./gitlab ./gitlab/config ./gitlab/logs ./gitlab/data
+sudo chmod 700 ./gitlab ./gitlab/config ./gitlab/logs ./gitlab/data
 
-echo "=== [3/3] Launching GitLab Services via Docker Compose ==="
-docker compose up -d
+echo "=== [3/3] Launching GitLab via Docker Compose ==="
+docker compose -f "$COMPOSE_FILE" up -d
 
 echo "✅ GitLab Deployment Triggered successfully!"

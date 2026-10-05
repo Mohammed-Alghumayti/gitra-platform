@@ -28,9 +28,21 @@ variable "subnet_address_prefix" {
 }
 
 variable "vm_size" {
-  description = "VM size. GitLab CE needs at least 4 GB RAM; 8 GB is recommended."
+  description = "GitLab VM size. GitLab CE needs at least 4 GB RAM; 8 GB is recommended."
   type        = string
   default     = "Standard_D2s_v3" # 2 vCPU, 8 GB RAM
+}
+
+variable "runner_vm_size" {
+  description = "Runner VM size (runs CI jobs and the staging app)."
+  type        = string
+  default     = "Standard_B2s" # 2 vCPU, 4 GB RAM
+}
+
+variable "dns_label" {
+  description = "Free Azure DNS name for GitLab: <dns_label>.<location>.cloudapp.azure.com. Must be unique in the region. Needed for the HTTPS certificate."
+  type        = string
+  default     = "gitra-platform"
 }
 
 variable "os_disk_size_gb" {
@@ -52,13 +64,13 @@ variable "admin_ssh_public_key_path" {
 }
 
 variable "admin_source_cidrs" {
-  description = "CIDRs allowed to reach admin SSH (port 22). Restrict to the team's IPs."
+  description = "CIDRs allowed to reach admin SSH (port 22). Open by default; SSH is key-only and fail2ban blocks brute force."
   type        = list(string)
   default     = ["0.0.0.0/0"]
 }
 
 variable "user_source_cidrs" {
-  description = "CIDRs allowed to reach GitLab web, Git SSH and the staging app."
+  description = "CIDRs allowed to reach GitLab web, Git SSH and the staging app. Public by design."
   type        = list(string)
   default     = ["0.0.0.0/0"]
 }

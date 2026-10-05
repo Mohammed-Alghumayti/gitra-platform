@@ -13,7 +13,7 @@ A minimal Flask app used to demonstrate the Gitra CI/CD pipeline.
 |---|---|---|
 | test | `test` | Installs requirements and runs `pytest` |
 | build | `build` | Builds the Docker image, tagged with the commit SHA |
-| deploy | `deploy_staging` | Runs the image on the VM at port `5000` (default branch only) |
+| deploy | `deploy_staging` | Runs the image on the runner VM at port `5000` (default branch only) |
 
 ## Run locally
 
