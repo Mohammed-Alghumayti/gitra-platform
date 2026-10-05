@@ -61,7 +61,7 @@ gitra-platform/
 ├── docker-compose.runner.yaml     # GitLab Runner (runner VM)
 ├── scripts/                       # Member 3
 │   ├── deploy.sh                   # Storage folders + launch GitLab
-│   ├── health_check.sh             # Waits for GitLab to become reachable
+│   ├── health_check.sh             # Waits until GitLab is really ready (container healthy + HTTP)
 │   ├── harden_gitlab.sh            # Sign-up approval, mandatory 2FA, password policy
 │   ├── deploy_runner.sh            # Launch the runner (runner VM)
 │   ├── register_runner.sh          # Register the runner with GitLab
