@@ -185,7 +185,28 @@ az vm user update -g gitra-rg -n gitra-gitlab-vm \
 ssh -i ~/.ssh/gitra_admin gitra@gitra-25ee91e6.eastus.cloudapp.azure.com
 ```
 
-To use it from your own computer, run step 1 there (Windows PowerShell: `ssh-keygen -t ed25519 -f $HOME\.ssh\gitra_admin`) and pass that computer's `.pub` file in step 2. **Never share the private key** (the file without `.pub`).
+> Cloud Shell is **Bash**: paths use `/` (`~/.ssh/...`). The Windows form `$HOME\.ssh\...` fails there with `Permission denied`.
+
+### Or from your own Windows computer (PowerShell)
+
+```powershell
+# 1. Create a key pair (press Enter twice for no passphrase)
+mkdir "$HOME\.ssh" -Force
+ssh-keygen -t ed25519 -C "gitra-admin" -f "$HOME\.ssh\gitra_admin"
+
+# 2. Show the public key and copy the whole line (starts with ssh-ed25519)
+Get-Content "$HOME\.ssh\gitra_admin.pub"
+```
+
+**Step 3.** Add it to the VM — either in Cloud Shell: `az vm user update -g gitra-rg -n gitra-gitlab-vm -u gitra --ssh-key-value "<the copied line>"`, or in the portal: `gitra-gitlab-vm` → **Help → Reset password** → **Add SSH public key**, username `gitra`, paste the key → **Update**.
+
+**Step 4.** Log in from PowerShell:
+
+```powershell
+ssh -i "$HOME\.ssh\gitra_admin" gitra@gitra-25ee91e6.eastus.cloudapp.azure.com
+```
+
+**Never share the private key** (the file without `.pub`).
 
 ### Without SSH
 **Azure portal → `gitra-gitlab-vm` → Operations → Run command → RunShellScript** runs commands as root, no SSH needed.
