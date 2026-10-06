@@ -8,7 +8,7 @@ Gitra is an internal Git and CI/CD platform built on **GitLab CE**, running on *
 
 | Member | Workstream | Main folders |
 |---|---|---|
-| **Member 1** — Nasser | Azure Infrastructure & Terraform | `terraform/` |
+| **Member 1** — Nasser | Azure Infrastructure & Terraform | `terraform/gitlab`, `terraform/runner` |
 | **Member 2** — Faisal | GitLab & CI/CD Configuration | `sample-app/`, runner |
 | **Member 3** — Mohammed | Docker, Bash Automation & Operations | `docker-compose*.yaml`, `scripts/`, `.github/` |
 
@@ -55,38 +55,53 @@ Gitra is an internal Git and CI/CD platform built on **GitLab CE**, running on *
 ## Member 1 — Azure Infrastructure & Terraform
 
 ### What this covers
-Terraform provisions everything the CI runner needs on Azure. The GitLab VM already existed; the deploy workflow prepares it with the Azure CLI (see [Deployment](deployment.md)).
+Terraform defines all the Azure infrastructure, in two configurations with separate state files — one for the **GitLab platform**, one for the **CI runner** — so a change to one can never touch the other.
 
 ### Repository layout
 ```
 terraform/
-├── providers.tf                 # azurerm provider + remote state backend (Azure Storage)
-├── variables.tf                 # Inputs: region, VM size, SSH key, GitLab URL, allowed CIDRs…
-├── main.tf                      # Resource group (gitra-runner-rg)
-├── network.tf                   # VNet, subnet, static public IP, NIC
-├── security.tf                  # Runner NSG (22, 5000) + NIC association
-├── vm.tf                        # Ubuntu 22.04 runner VM, SSH keys only
-├── cloud-init-runner.yaml.tftpl # First boot: Docker, fail2ban, clone repo, start runner
-├── outputs.tf                   # Runner IP, SSH command, staging URL
-├── terraform.tfvars.example     # Only needed for manual runs
-└── tests/plan.tftest.hcl        # terraform test with a mocked Azure provider
+├── gitlab/                        # GitLab platform (state: gitra-gitlab.tfstate)
+│   ├── providers.tf               # azurerm + random, remote state in Azure Storage
+│   ├── variables.tf               # Region, zone, VM size, DNS label, address ranges…
+│   ├── main.tf                    # Resource group gitra-rg
+│   ├── network.tf                 # VNet, subnet, static public IP + DNS name, NIC
+│   ├── security.tf                # NSG (22, 80, 443, 2224) + NIC association
+│   ├── vm.tf                      # gitra-gitlab-vm (Standard_D4s_v4, Trusted Launch)
+│   ├── outputs.tf                 # GitLab URL, public IP
+│   ├── import_existing.sh         # Adopts the existing resources into the state
+│   └── tests/platform.tftest.hcl  # Names, sizes, ranges, NSG ports
+└── runner/                        # CI runner (state: gitra-runner.tfstate)
+    ├── providers.tf, variables.tf, main.tf
+    ├── network.tf                 # VNet, subnet, static public IP, NIC
+    ├── security.tf                # NSG (22, 5000) + NIC association
+    ├── vm.tf                      # gitra-runner-vm, SSH keys only
+    ├── cloud-init-runner.yaml.tftpl  # First boot: Docker, fail2ban, clone repo, start runner
+    ├── outputs.tf                 # Runner IP, SSH command, staging URL
+    └── tests/plan.tftest.hcl      # Runner config, SSH keys only, NSG ports, names
 ```
 
 ### Resources
-| Resource | Name | Notes |
-|---|---|---|
-| Resource group | `gitra-runner-rg` | Runner only — kept apart from `gitra-rg` (GitLab VM) |
-| Virtual network / subnet | `gitra-runner-vnet` / `gitra-runner-subnet` | `10.20.0.0/16` / `10.20.1.0/24` |
-| Public IP | `gitra-runner-pip` | Static, Standard SKU |
-| NSG | `gitra-runner-nsg` | 22, 5000 |
-| VM | `gitra-runner-vm` | First 2-vCPU size with capacity (currently `Standard_B2s_v2`), 32 GB Premium SSD |
-| State storage | `gitra-tfstate-rg` / `gitratf…` | Created by the workflow; keeps Terraform state between runs |
+| Config | Resource | Name | Notes |
+|---|---|---|---|
+| gitlab | Resource group | `gitra-rg` | `prevent_destroy` |
+| gitlab | VNet / subnet | `vnet-eastus-1` / `snet-eastus-1` | `172.16.0.0/16` / `172.16.0.0/24` |
+| gitlab | Public IP | `gitra-gitlab-vm-ip` | Static, zone 1, DNS `gitra-25ee91e6` — `prevent_destroy` |
+| gitlab | NSG | `gitra-gitlab-vm-nsg` | 22, 80, 443, 2224 |
+| gitlab | VM | `gitra-gitlab-vm` | `Standard_D4s_v4` (4 vCPU, 16 GB), zone 1, Trusted Launch, 30 GB Premium SSD — `prevent_destroy` |
+| runner | Resource group | `gitra-runner-rg` | Runner only |
+| runner | VNet / subnet | `gitra-runner-vnet` / `gitra-runner-subnet` | `10.20.0.0/16` / `10.20.1.0/24` |
+| runner | Public IP | `gitra-runner-pip` | Static |
+| runner | NSG | `gitra-runner-nsg` | 22, 5000 |
+| runner | VM | `gitra-runner-vm` | First 2-vCPU size with capacity (currently `Standard_B2s_v2`), 32 GB Premium SSD |
+| both | State storage | `gitra-tfstate-rg` / `gitratf…` | Created by the workflow |
 
 ### Notable implementation details
+- **Adopting the existing platform.** The GitLab VM was created before Terraform managed it. `import_existing.sh` imports each resource into the state (importing changes nothing in Azure); the configuration was written from the VM's actual Azure settings so the plan matches reality.
+- **Data safety.** `prevent_destroy` on the resource group, public IP and VM. The workflow refuses to apply a plan that deletes or replaces anything, and doesn't auto-apply a plan that would modify an existing resource.
+- **Settings that would force a rebuild are ignored** (`ignore_changes` on the admin password, SSH key, custom data and image version), so Terraform never recreates the VM over them.
 - **Remote state** in Azure Storage, so every GitHub Actions run sees the same infrastructure.
-- **`replace_triggered_by`** rebuilds the subnet with its VNet and the NIC–NSG link with the NIC — a subnet has no region of its own, so Terraform wouldn't notice it was gone after a region move.
-- **`prevent_deletion_if_contains_resources = false`** lets `gitra-runner-rg` be replaced on a region move even if a failed attempt left a disk behind (safe: that group only holds the runner).
-- **Tests without Azure:** `terraform test` with a mock provider checks the runner config, SSH-key-only login, exact NSG ports, the staging URL, and that names never reuse the existing `gitra-rg` / `gitra-gitlab-vm`.
+- **Runner:** `replace_triggered_by` rebuilds the subnet with its VNet and the NIC–NSG link with the NIC; `prevent_deletion_if_contains_resources = false` lets `gitra-runner-rg` move region even if a failed attempt left a disk.
+- **Tests without Azure:** `terraform test` with mocked providers in both configurations.
 
 ---
 

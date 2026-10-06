@@ -59,6 +59,7 @@ Push to `Testing`, or open the latest run under **Actions** and click **Re-run a
 
 | Step | What happens |
 |---|---|
+| **0. GitLab platform** | Terraform imports the existing platform into its state (first run only), then plans. It applies only if nothing would be deleted, replaced or modified; otherwise it stops with an error or a warning listing what differs |
 | **1. Prepare GitLab VM** | Finds the VM by its IP, **starts it if it's stopped**, makes the IP static, adds the free DNS name, opens ports 22/80/443/2224 in its NSG if missing, adds the `gitra-deploy` user with the SSH key (through the Azure VM agent — no password needed) |
 | **2. Deploy GitLab** | Installs Docker, git and fail2ban if needed, pulls the branch to `/opt/gitra-platform`, moves any older GitLab data there (nothing is lost), starts GitLab with HTTPS, **repairs file permissions** if GitLab can't read its own files, waits until GitLab is really ready, applies the security settings |
 | **2b. Root password** | Sets `root`'s password from the `GITLAB_ROOT_PASSWORD` secret |
@@ -161,7 +162,7 @@ For a runner on another VM: `./scripts/deploy_runner.sh`, then `./scripts/regist
 
 ```bash
 # Terraform
-cd terraform && terraform init -backend=false && terraform validate && terraform test
+for d in terraform/gitlab terraform/runner; do (cd $d && terraform init -backend=false && terraform validate && terraform test); done
 
 # Scripts and workflow
 shellcheck scripts/*.sh scripts/ci/*.sh

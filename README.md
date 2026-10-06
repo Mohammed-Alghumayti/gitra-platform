@@ -22,7 +22,7 @@ An internal GitLab CE platform deployed on Microsoft Azure, built as a 3-person 
 
 | Member | Workstream | Folder | Status |
 |---|---|---|---|
-| **Member 1** — Nasser | Azure Infrastructure & Terraform | `terraform/` | ✅ Complete |
+| **Member 1** — Nasser | Azure Infrastructure & Terraform | `terraform/gitlab`, `terraform/runner` | ✅ Complete |
 | **Member 2** — Faisal | GitLab & CI/CD Configuration | `sample-app/`, runner | ✅ Complete |
 | **Member 3** — Mohammed | Docker, Bash Automation & Operations | `docker-compose*.yaml`, `scripts/`, `.github/` | ✅ Complete |
 
@@ -56,15 +56,15 @@ An internal GitLab CE platform deployed on Microsoft Azure, built as a 3-person 
 ```
 gitra-platform/
 ├── .github/workflows/deploy.yml   # Fully automatic deployment (every push to Testing)
-├── terraform/                     # Member 1 — runner VM on Azure
-│   ├── providers.tf                # azurerm + remote state in Azure Storage
-│   ├── variables.tf, main.tf
-│   ├── network.tf                  # VNet, subnet, static public IP, NIC
-│   ├── security.tf                 # Runner NSG (22, 5000)
-│   ├── vm.tf                       # Runner VM (SSH keys only)
-│   ├── cloud-init-runner.yaml.tftpl  # Docker, fail2ban, start runner
-│   ├── outputs.tf
-│   └── tests/plan.tftest.hcl       # `terraform test` with a mocked Azure provider
+├── terraform/                     # Member 1 — Azure infrastructure (two configs, two state files)
+│   ├── gitlab/                     # GitLab platform: RG, VNet, subnet, NSG, public IP, NIC, VM
+│   │   ├── main.tf, network.tf, security.tf, vm.tf, variables.tf, outputs.tf
+│   │   ├── import_existing.sh      # Adopts the existing platform into Terraform (no recreate)
+│   │   └── tests/platform.tftest.hcl
+│   └── runner/                     # CI runner: RG, VNet, subnet, NSG, public IP, NIC, VM
+│       ├── main.tf, network.tf, security.tf, vm.tf, variables.tf, outputs.tf
+│       ├── cloud-init-runner.yaml.tftpl  # Docker, fail2ban, start runner
+│       └── tests/plan.tftest.hcl
 ├── docker-compose.yaml            # Member 3 — GitLab CE (GitLab VM)
 ├── docker-compose.runner.yaml     # GitLab Runner (runner VM)
 ├── scripts/                       # Member 3
@@ -119,6 +119,7 @@ Optional, under the **Variables** tab: `GITLAB_VM_IP` (default `20.55.88.3`), `D
 
 | Step | What happens |
 |---|---|
+| 0. GitLab platform | Terraform imports the existing platform (first run only) and plans; applies only if nothing would be deleted, replaced or modified |
 | 1. Prepare GitLab VM | Finds the VM by its IP, starts it if stopped, makes the IP static, adds a free DNS name, opens ports 22/80/443/2224 in its NSG if needed, adds the `gitra-deploy` user with the SSH key |
 | 2. Deploy GitLab | Pulls this branch to `/opt/gitra-platform`, moves any existing GitLab data there (nothing is lost), starts GitLab with HTTPS, repairs file permissions if GitLab can't read its own files, waits until it's ready, applies the security settings, sets `root`'s password from the secret |
 | 3. Runner VM | Terraform creates/updates `gitra-runner-vm` in `gitra-runner-rg` (state kept in Azure Storage, so runs don't duplicate anything). It tries several sizes and regions until Azure has capacity, cleaning up after each failed attempt |
@@ -252,7 +253,14 @@ The first real deployments on Azure surfaced problems that local tests couldn't.
 
 ## Member 1 — Azure Infrastructure & Terraform
 
-Terraform manages the runner VM; the GitLab VM already existed and is prepared by the workflow.
+Terraform is split in two configurations, each with its own state file, so a change to one can never touch the other:
+
+| Config | Builds | State |
+|---|---|---|
+| `terraform/gitlab` | The GitLab platform: resource group `gitra-rg`, VNet `vnet-eastus-1`, subnet, NSG (22, 80, 443, 2224), static public IP with DNS name, NIC, VM `gitra-gitlab-vm` | `gitra-gitlab.tfstate` |
+| `terraform/runner` | The CI runner: resource group `gitra-runner-rg`, VNet, subnet, NSG (22, 5000), public IP, NIC, VM `gitra-runner-vm` | `gitra-runner.tfstate` |
+
+**Adopting the existing GitLab VM:** the platform was created before Terraform managed it, so `import_existing.sh` imports each resource into the state — importing changes nothing in Azure. `prevent_destroy` guards the resource group, public IP and VM, and the workflow refuses to apply any plan that would delete or replace something; if a plan would modify an existing resource it isn't applied automatically.
 
 **Why two regions:** the subscription allows 4 vCPUs per region, and the GitLab VM (`Standard_D4s_v4`) uses all 4 in East US. Quotas are per region, so the runner VM goes to another region — the first of West US 2, Central US, East US 2, West US 3 or North Europe with capacity (`RUNNER_LOCATION` pins one). The runner only talks to GitLab over HTTPS, so the distance doesn't matter.
 
@@ -265,7 +273,7 @@ Terraform manages the runner VM; the GitLab VM already existed and is prepared b
 | Runner VM | `gitra-runner-vm` | First 2-vCPU size with capacity (currently `Standard_B2s_v2` in West US 2), 32 GB Premium SSD, Ubuntu 22.04 |
 | State storage | `gitra-tfstate-rg` / `gitratf…` | Created by the workflow; keeps Terraform state between runs |
 
-Local checks without Azure: `terraform init -backend=false && terraform validate && terraform test`.
+Local checks without Azure (in `terraform/gitlab` and `terraform/runner`): `terraform init -backend=false && terraform validate && terraform test`.
 
 ## Member 2 — GitLab & CI/CD
 

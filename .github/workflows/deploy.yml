@@ -1,5 +1,7 @@
 # Fully automatic deployment of the Gitra platform.
 # Every push to Testing (or a manual run) does all of this, end to end:
+#   0. Terraform manages the GitLab platform (RG, VNet, subnet, NSG, IP, VM) —
+#      existing resources are imported, never recreated
 #   1. Prepares the existing GitLab VM on Azure (static IP, DNS name, NSG, deploy user)
 #   2. Deploys/updates GitLab on it with HTTPS + security settings, sets root's password
 #   3. Creates/updates the runner VM with Terraform (state kept in Azure Storage).
@@ -76,6 +78,69 @@ jobs:
           chmod 600 ~/.ssh/gitra
           ssh-keygen -y -f ~/.ssh/gitra > ~/.ssh/gitra.pub
 
+      - name: "0a. Terraform credentials and state storage"
+        id: tfstate
+        if: steps.setup.outputs.ready == 'true'
+        env:
+          AZURE_CREDENTIALS: ${{ secrets.AZURE_CREDENTIALS }}
+        run: |
+          # Service principal for Terraform (both configs). Mask the secret first.
+          SECRET=$(jq -r .clientSecret <<< "$AZURE_CREDENTIALS")
+          echo "::add-mask::$SECRET"
+          {
+            echo "ARM_CLIENT_ID=$(jq -r .clientId <<< "$AZURE_CREDENTIALS")"
+            echo "ARM_CLIENT_SECRET=$SECRET"
+            echo "ARM_TENANT_ID=$(jq -r .tenantId <<< "$AZURE_CREDENTIALS")"
+            echo "ARM_SUBSCRIPTION_ID=$(jq -r .subscriptionId <<< "$AZURE_CREDENTIALS")"
+            echo "TF_VAR_subscription_id=$(jq -r .subscriptionId <<< "$AZURE_CREDENTIALS")"
+          } >> "$GITHUB_ENV"
+          # Storage account for Terraform state, created once.
+          SUB=$(az account show --query id -o tsv)
+          SA="gitratf$(printf '%s' "$SUB" | sha256sum | cut -c1-12)"
+          az group show -n "$TF_STATE_RG" -o none 2>/dev/null || az group create -n "$TF_STATE_RG" -l eastus -o none
+          if ! az storage account show -n "$SA" -g "$TF_STATE_RG" -o none 2>/dev/null; then
+            az storage account create -n "$SA" -g "$TF_STATE_RG" -l eastus \
+              --sku Standard_LRS --min-tls-version TLS1_2 --allow-blob-public-access false -o none
+          fi
+          KEY=$(az storage account keys list -n "$SA" -g "$TF_STATE_RG" --query '[0].value' -o tsv)
+          echo "::add-mask::$KEY"
+          az storage container create -n tfstate --account-name "$SA" --account-key "$KEY" -o none
+          echo "account=$SA" >> "$GITHUB_OUTPUT"
+
+      - uses: hashicorp/setup-terraform@v3
+        if: steps.setup.outputs.ready == 'true'
+        with:
+          terraform_wrapper: false
+
+      - name: "0b. GitLab platform (Terraform)"
+        if: steps.setup.outputs.ready == 'true'
+        working-directory: terraform/gitlab
+        run: |
+          terraform init -input=false \
+            -backend-config="resource_group_name=$TF_STATE_RG" \
+            -backend-config="storage_account_name=${{ steps.tfstate.outputs.account }}" \
+            -backend-config="container_name=tfstate" \
+            -backend-config="key=gitra-gitlab.tfstate"
+          # Adopt the existing platform resources (changes nothing in Azure).
+          bash import_existing.sh
+          terraform plan -input=false -out=platform.tfplan
+          terraform show -json platform.tfplan > plan.json
+          # Safety rules for the VM that holds all of GitLab's data:
+          #  - never apply a plan that deletes or replaces anything
+          #  - only apply automatically when nothing existing would be modified
+          DELETES=$(jq -r '[.resource_changes[] | select(.change.actions | index("delete")) | .address] | join(", ")' plan.json)
+          UPDATES=$(jq -r '[.resource_changes[] | select(.change.actions | index("update")) | .address] | join(", ")' plan.json)
+          if [ -n "$DELETES" ]; then
+            echo "::error::Refusing to apply: the plan would delete/replace: $DELETES"
+            exit 1
+          fi
+          if [ -n "$UPDATES" ]; then
+            echo "::warning::Not applied — the plan would modify existing resources: $UPDATES. Review the plan above and align terraform/gitlab with Azure."
+            exit 0
+          fi
+          terraform apply -input=false platform.tfplan
+          echo "✅ GitLab platform is managed by Terraform (no existing resource modified)."
+
       - name: "1. Prepare GitLab VM on Azure"
         id: vm
         if: steps.setup.outputs.ready == 'true'
@@ -113,46 +178,17 @@ jobs:
             echo "root password already matches the secret"
           fi
 
-      - name: "3a. Terraform state storage"
-        id: tfstate
-        if: steps.setup.outputs.ready == 'true'
-        run: |
-          SUB=$(az account show --query id -o tsv)
-          SA="gitratf$(printf '%s' "$SUB" | sha256sum | cut -c1-12)"
-          az group create -n "$TF_STATE_RG" -l "${{ steps.vm.outputs.location }}" -o none
-          if ! az storage account show -n "$SA" -g "$TF_STATE_RG" -o none 2>/dev/null; then
-            az storage account create -n "$SA" -g "$TF_STATE_RG" -l "${{ steps.vm.outputs.location }}" \
-              --sku Standard_LRS --min-tls-version TLS1_2 --allow-blob-public-access false -o none
-          fi
-          KEY=$(az storage account keys list -n "$SA" -g "$TF_STATE_RG" --query '[0].value' -o tsv)
-          echo "::add-mask::$KEY"
-          az storage container create -n tfstate --account-name "$SA" --account-key "$KEY" -o none
-          echo "account=$SA" >> "$GITHUB_OUTPUT"
-
-      - uses: hashicorp/setup-terraform@v3
-        if: steps.setup.outputs.ready == 'true'
-        with:
-          terraform_wrapper: false
-
-      - name: "3b. Runner VM (Terraform)"
+      - name: "3. Runner VM (Terraform)"
         id: tf
         if: steps.setup.outputs.ready == 'true'
-        working-directory: terraform
-        env:
-          AZURE_CREDENTIALS: ${{ secrets.AZURE_CREDENTIALS }}
+        working-directory: terraform/runner
         run: |
-          ARM_CLIENT_ID=$(jq -r .clientId <<< "$AZURE_CREDENTIALS")
-          ARM_CLIENT_SECRET=$(jq -r .clientSecret <<< "$AZURE_CREDENTIALS")
-          ARM_TENANT_ID=$(jq -r .tenantId <<< "$AZURE_CREDENTIALS")
-          ARM_SUBSCRIPTION_ID=$(jq -r .subscriptionId <<< "$AZURE_CREDENTIALS")
-          TF_VAR_subscription_id="$ARM_SUBSCRIPTION_ID"
           TF_VAR_admin_username="$RUNNER_USER"
           TF_VAR_admin_ssh_public_key="$(cat ~/.ssh/gitra.pub)"
           TF_VAR_gitlab_url="https://${{ steps.vm.outputs.fqdn }}"
           TF_VAR_repo_url="${{ github.server_url }}/${{ github.repository }}.git"
           TF_VAR_repo_branch="${{ github.ref_name }}"
-          export ARM_CLIENT_ID ARM_CLIENT_SECRET ARM_TENANT_ID ARM_SUBSCRIPTION_ID
-          export TF_VAR_subscription_id TF_VAR_admin_username TF_VAR_admin_ssh_public_key TF_VAR_gitlab_url TF_VAR_repo_url TF_VAR_repo_branch
+          export TF_VAR_admin_username TF_VAR_admin_ssh_public_key TF_VAR_gitlab_url TF_VAR_repo_url TF_VAR_repo_branch
           terraform init -input=false \
             -backend-config="resource_group_name=$TF_STATE_RG" \
             -backend-config="storage_account_name=${{ steps.tfstate.outputs.account }}" \
@@ -200,7 +236,7 @@ jobs:
           echo "runner_ip=$(terraform output -raw runner_public_ip)" >> "$GITHUB_OUTPUT"
           echo "staging_url=$(terraform output -raw staging_app_url)" >> "$GITHUB_OUTPUT"
 
-      - name: "3c. Wait for runner VM and update it"
+      - name: "3b. Wait for runner VM and update it"
         id: runner
         if: steps.setup.outputs.ready == 'true'
         run: |

@@ -1,6 +1,6 @@
 # Local GitLab runtime data — contains secrets and user data, never commit this
-gitlab/
-runner/
+/gitlab/
+/runner/
 
 # Local backup output
 gitlab-backups/
@@ -9,12 +9,14 @@ gitlab-backups/
 .env
 
 # Terraform state and secrets — state holds resource details, tfvars may hold keys
-terraform/.terraform/
-terraform/*.tfstate
-terraform/*.tfstate.*
-terraform/*.tfvars
-terraform/.terraform.lock.hcl
-!terraform/terraform.tfvars.example
+terraform/**/.terraform/
+terraform/**/*.tfstate
+terraform/**/*.tfstate.*
+terraform/**/*.tfvars
+terraform/**/.terraform.lock.hcl
+terraform/**/*.tfplan
+terraform/**/plan.json
+!terraform/**/terraform.tfvars.example
 
 # Python
 __pycache__/
