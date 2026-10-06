@@ -205,7 +205,7 @@ jobs:
           # An existing runner VM keeps its region and size: try those first,
           # so a run never resizes (= reboots) a VM that already works.
           CURRENT=$(az vm show -g "$RUNNER_RG" -n gitra-runner-vm \
-            --query "[location, hardwareProfile.vmSize]" -o tsv 2>/dev/null | tr '\t' ' ' || true)
+            --query "[location, hardwareProfile.vmSize]" -o tsv 2>/dev/null | tr '\t\n' '  ' || true)
           if [ -n "$CURRENT" ]; then
             read -r cur_loc cur_size <<< "$CURRENT"
             first() { local x out="$1"; for x in $2; do [ "$x" = "$1" ] || out="$out $x"; done; echo "$out"; }
@@ -227,12 +227,25 @@ jobs:
             done
           }
 
+          # A stopped (deallocated) VM must also find capacity to start again.
+          # If it can't, the loop moves on: another size (resized in place)
+          # or another region (Terraform rebuilds the disposable runner VM).
+          start_runner() {
+            local power
+            power=$(az vm get-instance-view -g "$RUNNER_RG" -n gitra-runner-vm \
+              --query "instanceView.statuses[?starts_with(code, 'PowerState/')].code | [0]" -o tsv)
+            [ "$power" = "PowerState/running" ] && return 0
+            echo "Runner VM is ${power#PowerState/} — starting it..."
+            az vm start -g "$RUNNER_RG" -n gitra-runner-vm -o none
+          }
+
           applied=""
           for loc in $LOCATIONS; do
             for size in $SIZES; do
               echo "--- Trying runner size $size in $loc ---"
               cleanup_failed_vm
-              if terraform apply -input=false -auto-approve -var "location=$loc" -var "runner_vm_size=$size"; then
+              if terraform apply -input=false -auto-approve -var "location=$loc" -var "runner_vm_size=$size" &&
+                 start_runner; then
                 applied="$size in $loc"
                 break 2
               fi
@@ -242,14 +255,7 @@ jobs:
             echo "::error::No runner VM size had capacity in: $LOCATIONS. Set RUNNER_LOCATION (repo variable) to another region your subscription allows."
             exit 1
           fi
-          echo "✅ Runner VM: $applied"
-          # Start the runner VM if it was stopped (portal, auto-shutdown).
-          POWER=$(az vm get-instance-view -g "$RUNNER_RG" -n gitra-runner-vm \
-            --query "instanceView.statuses[?starts_with(code, 'PowerState/')].code | [0]" -o tsv)
-          if [ "$POWER" != "PowerState/running" ]; then
-            echo "Runner VM is ${POWER#PowerState/} — starting it..."
-            az vm start -g "$RUNNER_RG" -n gitra-runner-vm -o none
-          fi
+          echo "✅ Runner VM: $applied (running)"
           echo "runner_ip=$(terraform output -raw runner_public_ip)" >> "$GITHUB_OUTPUT"
           echo "staging_url=$(terraform output -raw staging_app_url)" >> "$GITHUB_OUTPUT"
 
