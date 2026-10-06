@@ -67,6 +67,20 @@ GitHub Actions deploys everything on each push to `Testing`, using the team's ex
 #### Result
 The full run passed end to end: GitLab over HTTPS with all security settings, root password set, runner VM created (`Standard_B2s_v2`, West US 2) and registered, and the demo pipeline **test → build → deploy_staging** passed.
 
+### v4.9 — Platform in Terraform, SSH keys only, restore
+| # | Change | Why |
+|---|---|---|
+| 1 | Terraform split in two: `terraform/gitlab` adopts the existing GitLab platform (RG, VNet, subnet, NSG, public IP, NIC, VM) with `terraform import`; `terraform/runner` keeps the runner | The spec asks for the platform itself in Terraform. Import adopts it without recreating the VM; the workflow refuses any plan that would delete or change it |
+| 2 | Admin SSH on the GitLab VM: password login off (`harden_ssh.sh`) | The VM was created with password login on; bots on the internet guess passwords on port 22 all day. Keys can't be guessed. Done inside the VM, not in Terraform, because changing it there would rebuild the VM |
+| 3 | `restore.sh` + restore steps in the docs | A backup is only useful if it can be restored. Tested locally: project deleted → restored with its repository |
+| 4 | Two-VM design justified against the spec's single-node model | See [Architecture](architecture.md#why-two-vms-instead-of-single-node) |
+
+| # | Problem | Cause | Fix |
+|---|---|---|---|
+| 11 | First platform plan stopped with `Not applied — the plan would modify ... azurerm_linux_virtual_machine.gitlab` | The VM has hibernation and Ultra SSD explicitly `false`; the config didn't say so, so Terraform planned to clear them. The safety check worked: nothing was changed | `additional_capabilities` set to match Azure |
+| 12 | Every run tried to resize the runner VM (`Standard_B2als_v2 -> Standard_B2s`), failing with `SkuNotAvailable` | The size list always started with `Standard_B2s`, whatever size the VM already had | An existing VM's own size and region are tried first — a working VM is never resized |
+| 13 | `ssh: connect to host … port 22: Connection timed out` waiting for the runner | The runner VM wasn't answering — most likely stopped (deallocated) | The workflow starts the runner VM if it isn't running, and fails with a clear message if it stays unreachable |
+
 ### Lessons learned
 - **Reproduce before fixing.** The permission bug was recreated on a local GitLab (same error, same restart loop) and the repair was proven there before it touched the real VM.
 - **Don't trust a single signal.** An HTTP answer or Docker's health status isn't proof the application is ready.
@@ -95,12 +109,15 @@ The full run passed end to end: GitLab over HTTPS with all security settings, ro
 | Workflow: `Deployment skipped — missing secrets` | Secrets not added | Add the 3 secrets ([Deployment](deployment.md)) |
 | Workflow: `No public IP ... in this subscription` | Wrong `GITLAB_VM_IP` | Set the `GITLAB_VM_IP` variable |
 | Workflow: `No runner VM size had capacity` | Azure has no capacity in the tried regions | Set `RUNNER_LOCATION` to another region your subscription allows |
-| Workflow fails at step 3c (waiting for runner VM) | Runner VM is stopped | Start `gitra-runner-vm` in the portal, then re-run |
+| Workflow: `Runner VM (…) not reachable over SSH` | Runner VM still booting, or its NSG/SSH is broken | Re-run; if it persists, check `gitra-runner-vm` → **Boot diagnostics** in the portal |
 | Runner shows **offline** in GitLab | Runner VM stopped, or token lost | Start the VM; if still offline, re-run the workflow (it re-registers when needed) |
 | Pipeline stuck in **pending** | No online runner | See the previous row |
 | `Permission denied - puma.rb` in GitLab logs | File permissions broken | Re-run the workflow — it repairs them. Manually: `docker exec gitlab_server update-permissions && docker restart gitlab_server` |
 | `git push` rejects the password | 2FA is on | Use a personal access token (**Edit profile → Access tokens**, scope `write_repository`) as the password |
 | New user can't log in | Account pending | **Admin → Users → Pending approval → Approve** |
+| `ssh gitra@…` says `Permission denied (publickey)` | Admin SSH accepts keys only | Add your key ([Deployment](deployment.md#server-access-admin-ssh)), or use **Run command** in the portal |
+| `restore.sh`: `Versions differ` | Backup made by another GitLab version | Start that version first ([Deployment](deployment.md#restore)) |
+| Deploy fails at `harden_ssh.sh`: `No SSH keys found` | No user on the VM has a key — turning passwords off would lock everyone out | Check step 1 added the deploy user's key, then re-run |
 
 ---
 
@@ -108,5 +125,4 @@ The full run passed end to end: GitLab over HTTPS with all security settings, ro
 - [ ] Pin the GitLab and runner image versions instead of `latest`, so upgrades are deliberate.
 - [ ] Copy encrypted backups off the VM (e.g. Azure Blob Storage) on a schedule.
 - [ ] Serve the staging app over HTTPS.
-- [ ] Have the workflow start a stopped runner VM automatically, like the GitLab VM.
 - [ ] Copy the workflow to `main` so the **Run workflow** button is available.

@@ -50,6 +50,21 @@ Gitra is an internal Git and CI/CD platform built on **GitLab CE**, running on *
 | **Infrastructure as Code** | Terraform defines the runner VM; the workflow can rebuild it at any time and changes are reviewed in Git. |
 | **Idempotent automation** | Every deployment step is safe to re-run, so a failed run can simply be run again. |
 
+### Why two VMs instead of single-node
+
+The project spec proposes a *single-node internal deployment model* — GitLab and its runner on one VM — for simplicity. We kept everything else in the spec but split the runner onto its own VM:
+
+| | Single-node (spec) | Two VMs (what we built) |
+|---|---|---|
+| **Security** | The runner mounts the Docker socket, so every CI job has root-level control of the machine — on a single node that is GitLab's machine, with its database, repositories and `gitlab-secrets.json` | CI jobs can only reach the runner VM; GitLab's data and secrets aren't there |
+| **Performance** | `docker build` and tests compete with GitLab (which needs ~4 GB RAM on its own) | GitLab keeps its whole VM |
+| **Azure quota** | GitLab already uses the subscription's 4-vCPU quota in East US; a bigger single VM wouldn't fit | The runner uses another region's quota |
+| **Recovery** | A runaway job can take GitLab down | The runner VM is disposable — Terraform rebuilds it on the next run |
+| **Cost** | One VM | One extra small VM (~$30–40/month; can be stopped) |
+| **Complexity** | Simpler | Automated away: the same workflow builds both |
+
+The spec itself lists the CI runner as *optional configuration*; we placed it where it can't hurt the platform. This follows GitLab's own guidance to not run runners on the GitLab server, and it was the first security risk raised in the design (see *Security model*).
+
 ---
 
 ## Member 1 — Azure Infrastructure & Terraform
@@ -199,7 +214,8 @@ Git SSH uses **2224** so it never conflicts with the VM's own admin SSH on 22, a
 | Login | 2FA mandatory (48h grace period); passwords ≥ 12 characters | `harden_gitlab.sh` |
 | Code | Projects can't be public — visible to signed-in users only | `harden_gitlab.sh` |
 | Brute force | GitLab's login rate limiting; fail2ban on SSH | GitLab, deploy scripts |
-| Servers | SSH keys only, no passwords; deploy user added through Azure | `azure_prepare_gitlab_vm.sh`, `vm.tf` |
+| Servers | Admin SSH accepts keys only (password and root login off); deploy user's key added through Azure | `harden_ssh.sh`, `azure_prepare_gitlab_vm.sh`, `terraform/runner/vm.tf` |
+| Recovery | Backups include the secrets needed to decrypt them; `restore.sh` checks versions and secrets | `backup.sh`, `restore.sh` |
 | Network | Each VM opens only the ports it needs | NSGs |
 | Isolation | CI jobs run on a separate VM from GitLab's data | Architecture |
 | Files | Parent data folder `root:700`; GitLab manages the rest | `deploy.sh` |

@@ -91,5 +91,6 @@ bash "$APP_DIR/scripts/health_check.sh" 900
 
 echo "=== [5/5] Security settings ==="
 bash "$APP_DIR/scripts/harden_gitlab.sh"
+bash "$APP_DIR/scripts/harden_ssh.sh"
 
 echo "✅ GitLab deployed at $EXTERNAL_URL"
