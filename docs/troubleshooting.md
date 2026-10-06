@@ -79,7 +79,8 @@ The full run passed end to end: GitLab over HTTPS with all security settings, ro
 |---|---|---|---|
 | 11 | First platform plan stopped with `Not applied — the plan would modify ... azurerm_linux_virtual_machine.gitlab` | The VM has hibernation and Ultra SSD explicitly `false`; the config didn't say so, so Terraform planned to clear them. The safety check worked: nothing was changed | `additional_capabilities` set to match Azure |
 | 12 | Every run tried to resize the runner VM (`Standard_B2als_v2 -> Standard_B2s`), failing with `SkuNotAvailable` | The size list always started with `Standard_B2s`, whatever size the VM already had | An existing VM's own size and region are tried first — a working VM is never resized |
-| 13 | `ssh: connect to host … port 22: Connection timed out` waiting for the runner | The runner VM wasn't answering — most likely stopped (deallocated) | The workflow starts the runner VM if it isn't running, and fails with a clear message if it stays unreachable |
+| 13 | `ssh: connect to host … port 22: Connection timed out` waiting for the runner | The runner VM was stopped (deallocated) | The workflow starts the runner VM if it isn't running, and fails with a clear message if it stays unreachable |
+| 14 | Starting the stopped runner VM failed: `AllocationFailed` | A deallocated VM gives up its hardware; West US 2 had no capacity left to start it again | Starting the VM is part of each attempt in the size/region loop: if it can't start, the next size is tried (resized while stopped), then the next region (Terraform rebuilds the disposable runner VM, which re-registers itself) |
 
 ### Lessons learned
 - **Reproduce before fixing.** The permission bug was recreated on a local GitLab (same error, same restart loop) and the repair was proven there before it touched the real VM.
