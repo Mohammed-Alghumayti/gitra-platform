@@ -231,11 +231,12 @@ jobs:
           # If it can't, the loop moves on: another size (resized in place)
           # or another region (Terraform rebuilds the disposable runner VM).
           start_runner() {
-            local power
+            local power state
             power=$(az vm get-instance-view -g "$RUNNER_RG" -n gitra-runner-vm \
               --query "instanceView.statuses[?starts_with(code, 'PowerState/')].code | [0]" -o tsv)
             [ "$power" = "PowerState/running" ] && return 0
-            echo "Runner VM is ${power#PowerState/} — starting it..."
+            state="${power#PowerState/}"
+            echo "Runner VM is ${state:-not running} — starting it..."
             az vm start -g "$RUNNER_RG" -n gitra-runner-vm -o none
           }
 
