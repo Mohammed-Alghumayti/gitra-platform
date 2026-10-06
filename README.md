@@ -71,9 +71,11 @@ gitra-platform/
 │   ├── deploy.sh                   # Storage folders + launch GitLab
 │   ├── health_check.sh             # Waits until GitLab is really ready (/-/readiness + HTTP)
 │   ├── harden_gitlab.sh            # Sign-up approval, mandatory 2FA, password policy
+│   ├── harden_ssh.sh               # Admin SSH: keys only, no password login
 │   ├── deploy_runner.sh            # Launch the runner (runner VM)
 │   ├── register_runner.sh          # Register the runner with GitLab
 │   ├── backup.sh                   # Creates and exports a GitLab backup
+│   ├── restore.sh                  # Restores GitLab from a backup.sh folder
 │   ├── setup.sh                    # Installs Docker (manual install path)
 │   └── ci/                         # Used by the GitHub Actions workflow
 │       ├── azure_prepare_gitlab_vm.sh  # Static IP, DNS name, NSG, deploy user
@@ -121,8 +123,8 @@ Optional, under the **Variables** tab: `GITLAB_VM_IP` (default `20.55.88.3`), `D
 |---|---|
 | 0. GitLab platform | Terraform imports the existing platform (first run only) and plans; applies only if nothing would be deleted, replaced or modified |
 | 1. Prepare GitLab VM | Finds the VM by its IP, starts it if stopped, makes the IP static, adds a free DNS name, opens ports 22/80/443/2224 in its NSG if needed, adds the `gitra-deploy` user with the SSH key |
-| 2. Deploy GitLab | Pulls this branch to `/opt/gitra-platform`, moves any existing GitLab data there (nothing is lost), starts GitLab with HTTPS, repairs file permissions if GitLab can't read its own files, waits until it's ready, applies the security settings, sets `root`'s password from the secret |
-| 3. Runner VM | Terraform creates/updates `gitra-runner-vm` in `gitra-runner-rg` (state kept in Azure Storage, so runs don't duplicate anything). It tries several sizes and regions until Azure has capacity, cleaning up after each failed attempt |
+| 2. Deploy GitLab | Pulls this branch to `/opt/gitra-platform`, moves any existing GitLab data there (nothing is lost), starts GitLab with HTTPS, repairs file permissions if GitLab can't read its own files, waits until it's ready, applies the security settings, turns off password login for admin SSH (keys only), sets `root`'s password from the secret |
+| 3. Runner VM | Terraform creates/updates `gitra-runner-vm` in `gitra-runner-rg` (state kept in Azure Storage, so runs don't duplicate anything). An existing runner VM keeps its size and region (no resize); a new one tries several sizes and regions until Azure has capacity, cleaning up after each failed attempt. Starts the runner VM if it's stopped |
 | 4. Runner registration | Registers the runner with GitLab (only when needed) |
 | 5. Demo app | Pushes `sample-app/` to GitLab and waits for its pipeline: **test → build → deploy_staging** |
 
@@ -146,13 +148,35 @@ cp .env.example .env               # set GITLAB_EXTERNAL_URL
 
 > Changing `GITLAB_EXTERNAL_URL` needs `docker compose down && docker compose up -d` — a restart does not re-read it. The workflow handles this automatically.
 
-### Backups
+### Backup and restore
 
 ```bash
-sudo /opt/gitra-platform/scripts/backup.sh [destination_dir]    # on the GitLab VM
+# On the GitLab VM
+sudo /opt/gitra-platform/scripts/backup.sh /root/gitlab-backups     # backup + gitlab-secrets.json + gitlab.rb
+sudo /opt/gitra-platform/scripts/restore.sh /root/gitlab-backups    # restores the newest backup
 ```
 
+`restore.sh` checks that the backup's GitLab version matches the running one, restores the secrets first (without them CI variables, runner tokens and 2FA can't be decrypted), stops the services that write to the database, restores, restarts and runs GitLab's own checks. Full steps: [Deployment & Operations](docs/deployment.md#backup-and-restore).
+
+### Server access (admin SSH)
+
+Admin SSH on the GitLab VM accepts **keys only** — password login is turned off by every deployment (`harden_ssh.sh`). To add your own key, see [Deployment & Operations](docs/deployment.md#server-access-admin-ssh). Without SSH, use **Azure portal → VM → Run command**.
+
 ---
+
+## Design decision — two VMs instead of single-node
+
+The project spec proposes a **single-node** deployment (GitLab and runner on one VM) for simplicity. We deliberately use **two VMs** instead:
+
+| | Single-node (spec) | Two VMs (what we built) |
+|---|---|---|
+| Security | CI jobs control Docker on the same machine as GitLab — any `.gitlab-ci.yml` could read GitLab's secrets or delete its data | CI jobs can only reach the runner VM; GitLab's data and secrets are not there |
+| Performance | Builds compete with GitLab for CPU and memory | GitLab keeps its whole VM |
+| Azure quota | Needs a bigger VM in East US, where the 4-vCPU quota is already used | Runner fits in another region's quota |
+| Recovery | A broken runner can take GitLab down with it | The runner VM is disposable — the next run rebuilds it |
+| Cost | One VM | One extra small VM (~$30–40/month; stop it when not needed) |
+
+Everything else in the spec is kept: one GitLab instance in Docker, Terraform for the infrastructure, persistent storage, a working CI runner. The runner is the spec's *optional CI runner configuration*, placed where it can't hurt the platform. Details: [Architecture](docs/architecture.md#why-two-vms-instead-of-single-node).
 
 ## Security decisions
 
@@ -180,7 +204,7 @@ Two risks came up while designing the platform. This is how each one is solved.
 | Login | 2FA mandatory for every user (48h grace period); minimum 12-character passwords | `harden_gitlab.sh` |
 | Code visibility | Projects can't be made public — code is visible to signed-in users only | `harden_gitlab.sh` |
 | Brute force | GitLab's built-in rate limiting on logins; fail2ban on admin SSH | GitLab default, deploy scripts |
-| Server access | SSH keys only; the deploy user is added through Azure, no passwords | `azure_prepare_gitlab_vm.sh`, `vm.tf` |
+| Server access | Admin SSH accepts keys only (password login off, root login off); the deploy user's key is added through Azure | `harden_ssh.sh`, `azure_prepare_gitlab_vm.sh`, `terraform/runner/vm.tf` |
 | Network | Each VM opens only the ports it needs | NSGs |
 | Pipeline secrets | Passwords and tokens are masked in logs, passed via stdin/env files (never on a command line), and the temporary GitLab token is revoked at the end of every run | `deploy.yml` |
 
@@ -188,7 +212,7 @@ Two risks came up while designing the platform. This is how each one is solved.
 
 | VM | Rule | Port | Purpose |
 |---|---|---|---|
-| GitLab | Allow-SSH-Admin | 22 | Server administration (keys only + fail2ban) |
+| GitLab | default-allow-ssh | 22 | Server administration (keys only + fail2ban) |
 | GitLab | Allow-HTTP | 80 | Redirect to HTTPS + Let's Encrypt validation |
 | GitLab | Allow-HTTPS | 443 | GitLab web interface |
 | GitLab | Allow-GitLab-SSH | 2224 | Git clone / push / pull over SSH |
@@ -309,6 +333,8 @@ Local checks without Azure (in `terraform/gitlab` and `terraform/runner`): `terr
 | `remote_deploy_gitlab.sh` against a simulated existing GitLab: data moved to `/opt`, nothing lost, security settings applied | ✅ Pass |
 | Permission repair: reproduced the VM's `chmod -R 700` damage locally (restart loop), repair brings GitLab back (readiness 200, no services down, PostgreSQL data still `700`) | ✅ Pass |
 | `health_check.sh`: waits through a restart, passes only once GitLab is ready | ✅ Pass |
+| `backup.sh` → delete a project → `restore.sh`: project and its repository back, `gitlab:doctor:secrets` 0 failures | ✅ Pass |
+| `harden_ssh.sh` on Ubuntu 22.04: overrides the image's `PasswordAuthentication yes`, refuses to run when no user has an SSH key | ✅ Pass |
 | `gitlab_bootstrap.rb`: root password, runner token, temporary token | ✅ Pass |
 | Runner deploy + registration + `gitlab-runner verify` | ✅ Pass |
 | `push_demo_app.sh`: project created, app pushed, pipeline started | ✅ Pass |

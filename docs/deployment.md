@@ -4,7 +4,7 @@
 
 ## What this covers
 
-How the platform is deployed (automatically, with GitHub Actions), the one-time setup it needs, and day-to-day operations: logging in, inviting people, starting and stopping the servers, backups, and which Azure resources are safe to delete.
+How the platform is deployed (automatically, with GitHub Actions), the one-time setup it needs, and day-to-day operations: logging in, inviting people, admin SSH access, starting and stopping the servers, backup and restore, and which Azure resources are safe to delete.
 
 **Live environment:** [https://gitra-25ee91e6.eastus.cloudapp.azure.com](https://gitra-25ee91e6.eastus.cloudapp.azure.com)
 
@@ -61,9 +61,9 @@ Push to `Testing`, or open the latest run under **Actions** and click **Re-run a
 |---|---|
 | **0. GitLab platform** | Terraform imports the existing platform into its state (first run only), then plans. It applies only if nothing would be deleted, replaced or modified; otherwise it stops with an error or a warning listing what differs |
 | **1. Prepare GitLab VM** | Finds the VM by its IP, **starts it if it's stopped**, makes the IP static, adds the free DNS name, opens ports 22/80/443/2224 in its NSG if missing, adds the `gitra-deploy` user with the SSH key (through the Azure VM agent — no password needed) |
-| **2. Deploy GitLab** | Installs Docker, git and fail2ban if needed, pulls the branch to `/opt/gitra-platform`, moves any older GitLab data there (nothing is lost), starts GitLab with HTTPS, **repairs file permissions** if GitLab can't read its own files, waits until GitLab is really ready, applies the security settings |
+| **2. Deploy GitLab** | Installs Docker, git and fail2ban if needed, pulls the branch to `/opt/gitra-platform`, moves any older GitLab data there (nothing is lost), starts GitLab with HTTPS, **repairs file permissions** if GitLab can't read its own files, waits until GitLab is really ready, applies the security settings, and turns off password login for admin SSH (keys only) |
 | **2b. Root password** | Sets `root`'s password from the `GITLAB_ROOT_PASSWORD` secret |
-| **3. Runner VM** | Creates the Terraform state storage if needed, then Terraform creates/updates the runner VM — trying sizes and regions until Azure has capacity, and cleaning up after each failed attempt |
+| **3. Runner VM** | Creates the Terraform state storage if needed, then Terraform creates/updates the runner VM. An existing VM keeps its size and region (it's never resized); a new one tries sizes and regions until Azure has capacity, cleaning up after each failed attempt. **Starts the runner VM if it's stopped** |
 | **4. Register runner** | Creates a runner token in GitLab and registers the runner (only if it isn't registered yet) |
 | **5. Demo app** | Creates `root/internal-demo-app` in GitLab, pushes `sample-app/`, and waits for its pipeline: **test → build → deploy_staging** |
 | **Clean-up** | Revokes the temporary GitLab token used in step 5 |
@@ -107,7 +107,7 @@ While stopped, data is kept and only disk and IP costs remain.
 
 ### Start
 - **Portal:** select the VM → **Start**. GitLab and the runner start on their own (`restart: always`); GitLab needs 3–5 minutes.
-- **GitHub Actions:** **Re-run all jobs** — this starts the **GitLab VM** automatically. Start the **runner VM** from the portal first if it was stopped.
+- **GitHub Actions:** **Re-run all jobs** — this starts **both VMs** automatically.
 
 ### Auto-shutdown
 If **Auto-shutdown** is enabled on a VM (VM → **Operations → Auto-shutdown**), it stops every day at the set time. The next deployment starts the GitLab VM again.
@@ -126,15 +126,72 @@ To save money, **stop** VMs instead of deleting anything.
 
 ---
 
-## Backups
+## Backup and restore
 
+### Backup
 On the GitLab VM:
 
 ```bash
-sudo /opt/gitra-platform/scripts/backup.sh [destination_dir]   # default: ~/gitlab-backups
+sudo /opt/gitra-platform/scripts/backup.sh /root/gitlab-backups
 ```
 
-It creates a GitLab backup and copies it to the host together with `gitlab-secrets.json` and `gitlab.rb` — **both are required to restore**. Treat the backup folder as sensitive and keep a copy off the VM. Backups older than 7 days are removed from the container.
+It creates a GitLab backup (`<id>_gitlab_backup.tar` — projects, users, issues, CI history) and copies it to the folder together with `gitlab-secrets.json` and `gitlab.rb` — **both are required to restore**. Treat the folder as sensitive and keep a copy off the VM. Backups older than 7 days are removed from the container.
+
+### Restore
+
+> ⚠️ A restore **replaces all current GitLab data** with the backup.
+
+```bash
+sudo /opt/gitra-platform/scripts/restore.sh /root/gitlab-backups            # newest backup in the folder
+sudo /opt/gitra-platform/scripts/restore.sh /root/gitlab-backups <backup_id> # a specific one
+```
+
+It asks you to type `yes`, then:
+
+| # | Step | Why |
+|---|---|---|
+| 1 | Checks the backup's GitLab version (the end of `<backup_id>`) matches the running GitLab | GitLab can only restore a backup made by the same version |
+| 2 | Restores `gitlab-secrets.json` and `gitlab.rb` (current ones are kept as `*.before-restore.<time>`), restarts GitLab | Without the matching secrets, CI variables, runner tokens and 2FA can't be decrypted |
+| 3 | Copies the backup into the container | `gitlab-backup` reads from `/var/opt/gitlab/backups` |
+| 4 | Stops `puma` and `sidekiq` | Nothing may write to the database during the restore |
+| 5 | `gitlab-backup restore` | Restores the database, repositories and uploads |
+| 6 | Restarts, waits until ready, runs `gitlab:check` and `gitlab:doctor:secrets` | Confirms GitLab works and every secret can be decrypted |
+
+**If the versions differ**, start the backup's version first: in `docker-compose.yaml` set `image: 'gitlab/gitlab-ce:<version>-ce.0'` (e.g. `17.4.0-ce.0`), run `docker compose up -d`, then restore.
+
+**Restoring onto a new VM** (e.g. the old one was lost):
+1. Deploy GitLab on the new VM (point `GITLAB_VM_IP` at it and re-run the workflow, or follow *Manual install* below).
+2. Copy the backup folder to the new VM: `scp -r gitlab-backups <user>@<new-vm>:/tmp/`
+3. `sudo /opt/gitra-platform/scripts/restore.sh /tmp/gitlab-backups`
+4. Re-run the workflow so the runner re-registers if needed.
+
+---
+
+## Server access (admin SSH)
+
+Admin SSH (port 22) on the GitLab VM accepts **SSH keys only** — every deployment turns password login off (`scripts/harden_ssh.sh`). Root login over SSH is off too. GitHub Actions is unaffected: it uses its own key (`gitra-deploy`).
+
+### Add your own key (once, in [Azure Cloud Shell](https://shell.azure.com), Bash)
+
+```bash
+# 1. Create a key pair (skip if you already have one)
+ssh-keygen -t ed25519 -N "" -C "gitra-admin" -f ~/.ssh/gitra_admin
+
+# 2. Add the public key to the "gitra" user on the GitLab VM (through the Azure VM agent)
+az vm user update -g gitra-rg -n gitra-gitlab-vm \
+  -u gitra --ssh-key-value "$(cat ~/.ssh/gitra_admin.pub)"
+
+# 3. Log in
+ssh -i ~/.ssh/gitra_admin gitra@gitra-25ee91e6.eastus.cloudapp.azure.com
+```
+
+To use it from your own computer, run step 1 there (Windows PowerShell: `ssh-keygen -t ed25519 -f $HOME\.ssh\gitra_admin`) and pass that computer's `.pub` file in step 2. **Never share the private key** (the file without `.pub`).
+
+### Without SSH
+**Azure portal → `gitra-gitlab-vm` → Operations → Run command → RunShellScript** runs commands as root, no SSH needed.
+
+### Turning password login back on (not recommended)
+Delete `/etc/ssh/sshd_config.d/00-gitra-hardening.conf` (via Run command) and run `systemctl reload ssh`. The next deployment turns it off again unless `harden_ssh.sh` is removed from `remote_deploy_gitlab.sh`.
 
 ---
 
