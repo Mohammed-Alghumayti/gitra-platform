@@ -202,6 +202,16 @@ jobs:
           LOCATIONS="${RUNNER_LOCATION:-westus2 centralus eastus2 westus3 northeurope}"
           SIZES="${RUNNER_VM_SIZE:-Standard_B2s Standard_B2als_v2 Standard_B2as_v2 Standard_B2s_v2 Standard_D2as_v5 Standard_D2s_v5 Standard_D2s_v3}"
           RUNNER_RG="gitra-runner-rg"
+          # An existing runner VM keeps its region and size: try those first,
+          # so a run never resizes (= reboots) a VM that already works.
+          CURRENT=$(az vm show -g "$RUNNER_RG" -n gitra-runner-vm \
+            --query "[location, hardwareProfile.vmSize]" -o tsv 2>/dev/null | tr '\t' ' ' || true)
+          if [ -n "$CURRENT" ]; then
+            read -r cur_loc cur_size <<< "$CURRENT"
+            first() { local x out="$1"; for x in $2; do [ "$x" = "$1" ] || out="$out $x"; done; echo "$out"; }
+            [ -n "${RUNNER_LOCATION:-}" ] || LOCATIONS=$(first "$cur_loc" "$LOCATIONS")
+            [ -n "${RUNNER_VM_SIZE:-}" ] || SIZES=$(first "$cur_size" "$SIZES")
+          fi
 
           # A failed allocation can leave a half-created VM (and its disk) that
           # Terraform doesn't track; the next attempt would then fail with
@@ -233,6 +243,13 @@ jobs:
             exit 1
           fi
           echo "✅ Runner VM: $applied"
+          # Start the runner VM if it was stopped (portal, auto-shutdown).
+          POWER=$(az vm get-instance-view -g "$RUNNER_RG" -n gitra-runner-vm \
+            --query "instanceView.statuses[?starts_with(code, 'PowerState/')].code | [0]" -o tsv)
+          if [ "$POWER" != "PowerState/running" ]; then
+            echo "Runner VM is ${POWER#PowerState/} — starting it..."
+            az vm start -g "$RUNNER_RG" -n gitra-runner-vm -o none
+          fi
           echo "runner_ip=$(terraform output -raw runner_public_ip)" >> "$GITHUB_OUTPUT"
           echo "staging_url=$(terraform output -raw staging_app_url)" >> "$GITHUB_OUTPUT"
 
@@ -241,11 +258,16 @@ jobs:
         if: steps.setup.outputs.ready == 'true'
         run: |
           IP="${{ steps.tf.outputs.runner_ip }}"
+          reachable=""
           for _ in $(seq 1 30); do
             # shellcheck disable=SC2086
-            ssh $SSH_OPTS "$RUNNER_USER@$IP" true 2>/dev/null && break
+            ssh $SSH_OPTS "$RUNNER_USER@$IP" true 2>/dev/null && { reachable=1; break; }
             sleep 10
           done
+          if [ -z "$reachable" ]; then
+            echo "::error::Runner VM ($IP) not reachable over SSH after 5 minutes. Check gitra-runner-vm in the Azure portal (status, boot diagnostics) and that its NSG allows port 22."
+            exit 1
+          fi
           # shellcheck disable=SC2086
           ssh $SSH_OPTS "$RUNNER_USER@$IP" "sudo cloud-init status --wait >/dev/null || true
             cd ~/gitra-platform
