@@ -40,6 +40,12 @@ resource "azurerm_linux_virtual_machine" "gitlab" {
   }
 
   # Boot diagnostics with a managed storage account.
+  # As on the existing VM; without this block Terraform plans to clear them.
+  additional_capabilities {
+    hibernation_enabled = false
+    ultra_ssd_enabled   = false
+  }
+
   boot_diagnostics {}
 
   lifecycle {
