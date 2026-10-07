@@ -70,28 +70,30 @@ The spec itself lists the CI runner as *optional configuration*; we placed it wh
 ## Member 1 — Azure Infrastructure & Terraform
 
 ### What this covers
-Terraform defines all the Azure infrastructure, in two configurations with separate state files — one for the **GitLab platform**, one for the **CI runner** — so a change to one can never touch the other.
+Terraform defines all the Azure infrastructure, in two configurations with separate state files — one for the **GitLab platform**, one for the **CI runner** — so a change to one can never touch the other. Each configuration is a single `main.tf`, split into clearly marked sections (settings, variables, resource group, network, security, VM, outputs); Terraform reads all `.tf` files in a folder as one, so file layout doesn't change what gets built.
 
 ### Repository layout
 ```
 terraform/
 ├── gitlab/                        # GitLab platform (state: gitra-gitlab.tfstate)
-│   ├── providers.tf               # azurerm + random, remote state in Azure Storage
-│   ├── variables.tf               # Region, zone, VM size, DNS label, address ranges…
-│   ├── main.tf                    # Resource group gitra-rg
-│   ├── network.tf                 # VNet, subnet, static public IP + DNS name, NIC
-│   ├── security.tf                # NSG (22, 80, 443, 2224) + NIC association
-│   ├── vm.tf                      # gitra-gitlab-vm (Standard_D4s_v4, Trusted Launch)
-│   ├── outputs.tf                 # GitLab URL, public IP
+│   ├── main.tf                    # Everything, in sections:
+│   │                              #   settings: azurerm + random, remote state in Azure Storage
+│   │                              #   variables: region, zone, VM size, DNS label, address ranges
+│   │                              #   resource group gitra-rg
+│   │                              #   network: VNet, subnet, static public IP + DNS name, NIC
+│   │                              #   security: NSG (22, 80, 443, 2224) + NIC association
+│   │                              #   VM: gitra-gitlab-vm (Standard_D4s_v4, Trusted Launch)
+│   │                              #   outputs: GitLab URL, public IP
 │   ├── import_existing.sh         # Adopts the existing resources into the state
 │   └── tests/platform.tftest.hcl  # Names, sizes, ranges, NSG ports
 └── runner/                        # CI runner (state: gitra-runner.tfstate)
-    ├── providers.tf, variables.tf, main.tf
-    ├── network.tf                 # VNet, subnet, static public IP, NIC
-    ├── security.tf                # NSG (22, 5000) + NIC association
-    ├── vm.tf                      # gitra-runner-vm, SSH keys only
+    ├── main.tf                    # Everything, in sections:
+    │                              #   settings, variables, resource group gitra-runner-rg
+    │                              #   network: VNet, subnet, static public IP, NIC
+    │                              #   security: NSG (22, 5000) + NIC association
+    │                              #   VM: gitra-runner-vm, SSH keys only
+    │                              #   outputs: runner IP, SSH command, staging URL
     ├── cloud-init-runner.yaml.tftpl  # First boot: Docker, fail2ban, clone repo, start runner
-    ├── outputs.tf                 # Runner IP, SSH command, staging URL
     └── tests/plan.tftest.hcl      # Runner config, SSH keys only, NSG ports, names
 ```
 
@@ -214,7 +216,7 @@ Git SSH uses **2224** so it never conflicts with the VM's own admin SSH on 22, a
 | Login | 2FA mandatory (48h grace period); passwords ≥ 12 characters | `harden_gitlab.sh` |
 | Code | Projects can't be public — visible to signed-in users only | `harden_gitlab.sh` |
 | Brute force | GitLab's login rate limiting; fail2ban on SSH | GitLab, deploy scripts |
-| Servers | Admin SSH accepts keys only (password and root login off); deploy user's key added through Azure | `harden_ssh.sh`, `azure_prepare_gitlab_vm.sh`, `terraform/runner/vm.tf` |
+| Servers | Admin SSH accepts keys only (password and root login off); deploy user's key added through Azure | `harden_ssh.sh`, `azure_prepare_gitlab_vm.sh`, `terraform/runner/main.tf` |
 | Recovery | Backups include the secrets needed to decrypt them; `restore.sh` checks versions and secrets | `backup.sh`, `restore.sh` |
 | Network | Each VM opens only the ports it needs | NSGs |
 | Isolation | CI jobs run on a separate VM from GitLab's data | Architecture |
