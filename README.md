@@ -58,11 +58,11 @@ gitra-platform/
 ├── .github/workflows/deploy.yml   # Fully automatic deployment (every push to Testing)
 ├── terraform/                     # Member 1 — Azure infrastructure (two configs, two state files)
 │   ├── gitlab/                     # GitLab platform: RG, VNet, subnet, NSG, public IP, NIC, VM
-│   │   ├── main.tf, network.tf, security.tf, vm.tf, variables.tf, outputs.tf
+│   │   ├── main.tf                 # Everything in one file: provider, variables, network, NSG, VM, outputs
 │   │   ├── import_existing.sh      # Adopts the existing platform into Terraform (no recreate)
 │   │   └── tests/platform.tftest.hcl
 │   └── runner/                     # CI runner: RG, VNet, subnet, NSG, public IP, NIC, VM
-│       ├── main.tf, network.tf, security.tf, vm.tf, variables.tf, outputs.tf
+│       ├── main.tf                 # Everything in one file: provider, variables, network, NSG, VM, outputs
 │       ├── cloud-init-runner.yaml.tftpl  # Docker, fail2ban, start runner
 │       └── tests/plan.tftest.hcl
 ├── docker-compose.yaml            # Member 3 — GitLab CE (GitLab VM)
@@ -204,7 +204,7 @@ Two risks came up while designing the platform. This is how each one is solved.
 | Login | 2FA mandatory for every user (48h grace period); minimum 12-character passwords | `harden_gitlab.sh` |
 | Code visibility | Projects can't be made public — code is visible to signed-in users only | `harden_gitlab.sh` |
 | Brute force | GitLab's built-in rate limiting on logins; fail2ban on admin SSH | GitLab default, deploy scripts |
-| Server access | Admin SSH accepts keys only (password login off, root login off); the deploy user's key is added through Azure | `harden_ssh.sh`, `azure_prepare_gitlab_vm.sh`, `terraform/runner/vm.tf` |
+| Server access | Admin SSH accepts keys only (password login off, root login off); the deploy user's key is added through Azure | `harden_ssh.sh`, `azure_prepare_gitlab_vm.sh`, `terraform/runner/main.tf` |
 | Network | Each VM opens only the ports it needs | NSGs |
 | Pipeline secrets | Passwords and tokens are masked in logs, passed via stdin/env files (never on a command line), and the temporary GitLab token is revoked at the end of every run | `deploy.yml` |
 
