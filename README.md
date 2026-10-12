@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/images/gitra-logo.png" alt="Gitra logo" width="420">
+  <img src="docs/images/gitra_logo_animation.gif" alt="Gitra logo" width="480">
 </p>
 
 # Gitra Platform — Internal Git & CI/CD Platform on Azure
