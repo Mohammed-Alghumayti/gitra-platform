@@ -1,0 +1,15 @@
+# GitLab Runner (runs on the separate runner VM, not on the GitLab VM).
+# Started by scripts/deploy_runner.sh, registered by scripts/register_runner.sh.
+name: gitra-runner
+
+services:
+  gitlab-runner:
+    image: 'gitlab/gitlab-runner:latest'
+    container_name: gitlab-runner
+    restart: always
+    volumes:
+      - './runner:/etc/gitlab-runner'
+      # Lets jobs build and run images on this VM's Docker engine. This gives
+      # CI jobs root-level access to the runner VM — which is why the runner
+      # has its own VM: GitLab's data and secrets are not on it.
+      - '/var/run/docker.sock:/var/run/docker.sock'

@@ -1,0 +1,8 @@
+# Only needed to run Terraform by hand. The GitHub Actions workflow passes
+# these values automatically. terraform.tfvars is git-ignored.
+subscription_id      = "00000000-0000-0000-0000-000000000000"
+location             = "eastus"
+runner_vm_size       = "Standard_B2s"
+admin_ssh_public_key = "ssh-rsa AAAA... gitra-deploy"
+gitlab_url           = "https://gitra-xxxx.eastus.cloudapp.azure.com"
+repo_branch          = "Testing"
