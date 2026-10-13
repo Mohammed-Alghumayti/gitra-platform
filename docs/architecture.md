@@ -17,7 +17,7 @@ Gitra is an internal Git and CI/CD platform built on **GitLab CE**, running on *
 ## System overview
 
 ```
-                     GitHub — push to Testing
+                      GitHub — push to main
                                 │
                      GitHub Actions (deploy.yml)
            ┌────────────────────┼────────────────────────┐

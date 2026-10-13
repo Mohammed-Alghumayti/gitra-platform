@@ -107,7 +107,7 @@ variable "repo_url" {
 variable "repo_branch" {
   description = "Branch of repo_url to clone."
   type        = string
-  default     = "Testing"
+  default     = "main"
 }
 
 variable "tags" {
@@ -279,6 +279,12 @@ resource "azurerm_linux_virtual_machine" "runner" {
 
   # The NSG must be in place before the VM is reachable.
   depends_on = [azurerm_network_interface_security_group_association.runner]
+
+  lifecycle {
+    # cloud-init only runs on first boot; later runs update the checkout over
+    # SSH (workflow step 3b). A changed value must not rebuild the VM.
+    ignore_changes = [custom_data]
+  }
 }
 
 # ==========================================================================

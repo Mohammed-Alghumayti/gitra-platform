@@ -6,7 +6,7 @@
 
 An internal GitLab CE platform deployed on Microsoft Azure, built as a 3-person bootcamp project. The platform gives the team a single place for source control, code review, and CI/CD pipelines — publicly reachable, so supervisors and other students can use it, with security built in.
 
-**Fully automatic:** after a one-time setup, every push to `Testing` deploys everything with GitHub Actions — nobody needs to log in to a server.
+**Fully automatic:** after a one-time setup, every merge into `main` deploys everything with GitHub Actions — nobody needs to log in to a server.
 
 **Live environment:** [https://gitra-25ee91e6.eastus.cloudapp.azure.com](https://gitra-25ee91e6.eastus.cloudapp.azure.com) — the team's Azure VM (`20.55.88.3`, East US), over HTTPS. The staging app URL is shown in each workflow run's summary.
 
@@ -31,7 +31,7 @@ An internal GitLab CE platform deployed on Microsoft Azure, built as a 3-person 
 ## Architecture Overview
 
 ```
-                    GitHub — push to Testing
+                     GitHub — push to main
                                │
                     GitHub Actions (deploy.yml)
           ┌────────────────────┼────────────────────────┐
@@ -55,7 +55,7 @@ An internal GitLab CE platform deployed on Microsoft Azure, built as a 3-person 
 
 ```
 gitra-platform/
-├── .github/workflows/deploy.yml   # Fully automatic deployment (every push to Testing)
+├── .github/workflows/deploy.yml   # Fully automatic deployment (every push to main)
 ├── terraform/                     # Member 1 — Azure infrastructure (two configs, two state files)
 │   ├── gitlab/                     # GitLab platform: RG, VNet, subnet, NSG, public IP, NIC, VM
 │   │   ├── main.tf                 # Everything in one file: provider, variables, network, NSG, VM, outputs
@@ -115,7 +115,7 @@ The first command prints a JSON block; the last one prints a private key. Keep b
 
 Optional, under the **Variables** tab: `GITLAB_VM_IP` (default `20.55.88.3`), `DNS_LABEL` (default `gitra-<8 chars>`), `RUNNER_LOCATION` and `RUNNER_VM_SIZE` (by default the workflow tries several small 2-vCPU sizes in `westus2`, `centralus`, `eastus2`, `westus3`, `northeurope` and uses the first one Azure has capacity for).
 
-**3. Run it** — **Actions → Deploy Gitra Platform → Run workflow** (or just push to `Testing`).
+**3. Run it** — **Actions → Deploy Gitra Platform → Run workflow** (or merge a pull request into `main`).
 
 ### What every run does
 
@@ -139,7 +139,7 @@ The run's **Summary** page shows the GitLab URL, the demo project and the stagin
 ### Manual install (without GitHub Actions)
 
 ```bash
-git clone -b Testing https://github.com/Mohammed-Alghumayti/gitra-platform.git
+git clone -b main https://github.com/Mohammed-Alghumayti/gitra-platform.git
 cd gitra-platform && chmod +x scripts/*.sh
 ./scripts/setup.sh && newgrp docker
 cp .env.example .env               # set GITLAB_EXTERNAL_URL

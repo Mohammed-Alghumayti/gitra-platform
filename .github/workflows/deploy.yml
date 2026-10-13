@@ -1,5 +1,5 @@
 # Fully automatic deployment of the Gitra platform.
-# Every push to Testing (or a manual run) does all of this, end to end:
+# Every push to main (a merged pull request) or a manual run does all of this, end to end:
 #   0. Terraform manages the GitLab platform (RG, VNet, subnet, NSG, IP, VM) —
 #      existing resources are imported, never recreated
 #   1. Prepares the existing GitLab VM on Azure (static IP, DNS name, NSG, deploy user)
@@ -14,7 +14,7 @@ name: Deploy Gitra Platform
 
 on:
   push:
-    branches: [Testing]
+    branches: [main]
     # Docs-only changes don't need a redeploy.
     paths-ignore: ['**.md', 'docs/**']
   workflow_dispatch:
