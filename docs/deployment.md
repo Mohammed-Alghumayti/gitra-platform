@@ -47,15 +47,15 @@ Same page, **Variables** tab:
 | `RUNNER_VM_SIZE` | tries 7 small 2-vCPU sizes | Pin the runner VM's size |
 
 ### 4. Run
-Push to `Testing`, or open the latest run under **Actions** and click **Re-run all jobs**.
+Merge a pull request into `main`, or open **Actions → Deploy Gitra Platform → Run workflow**.
 
-> The **Run workflow** button only appears once the workflow file exists on the default branch (`main`). Until then, use a push or **Re-run**.
+> `main` is protected: changes reach it only through a pull request approved by the team.
 
 ---
 
 ## What every deployment does
 
-`.github/workflows/deploy.yml` runs on every push to `Testing` (docs-only changes are skipped). Each step is idempotent — safe to re-run after a failure.
+`.github/workflows/deploy.yml` runs on every push to `main` (docs-only changes are skipped). Each step is idempotent — safe to re-run after a failure.
 
 | Step | What happens |
 |---|---|
@@ -221,7 +221,7 @@ Delete `/etc/ssh/sshd_config.d/00-gitra-hardening.conf` (via Run command) and ru
 On a fresh Ubuntu VM:
 
 ```bash
-git clone -b Testing https://github.com/Mohammed-Alghumayti/gitra-platform.git
+git clone -b main https://github.com/Mohammed-Alghumayti/gitra-platform.git
 cd gitra-platform && chmod +x scripts/*.sh
 ./scripts/setup.sh && newgrp docker
 cp .env.example .env                   # set GITLAB_EXTERNAL_URL

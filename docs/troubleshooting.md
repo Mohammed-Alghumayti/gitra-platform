@@ -82,6 +82,13 @@ The full run passed end to end: GitLab over HTTPS with all security settings, ro
 | 13 | `ssh: connect to host … port 22: Connection timed out` waiting for the runner | The runner VM was stopped (deallocated) | The workflow starts the runner VM if it isn't running, and fails with a clear message if it stays unreachable |
 | 14 | Starting the stopped runner VM failed: `AllocationFailed` | A deallocated VM gives up its hardware; West US 2 had no capacity left to start it again | Starting the VM is part of each attempt in the size/region loop: if it can't start, the next size is tried (resized while stopped), then the next region (Terraform rebuilds the disposable runner VM, which re-registers itself) |
 
+### v5.0 — Released to `main`
+| # | Change |
+|---|---|
+| 1 | `Testing` merged into `main` through a pull request approved by the whole team |
+| 2 | `main` is protected: changes need a reviewed pull request |
+| 3 | Deployments now run from `main`; the runner VM ignores `custom_data` changes, so the branch switch doesn't rebuild it |
+
 ### Lessons learned
 - **Reproduce before fixing.** The permission bug was recreated on a local GitLab (same error, same restart loop) and the repair was proven there before it touched the real VM.
 - **Don't trust a single signal.** An HTTP answer or Docker's health status isn't proof the application is ready.
@@ -126,4 +133,4 @@ The full run passed end to end: GitLab over HTTPS with all security settings, ro
 - [ ] Pin the GitLab and runner image versions instead of `latest`, so upgrades are deliberate.
 - [ ] Copy encrypted backups off the VM (e.g. Azure Blob Storage) on a schedule.
 - [ ] Serve the staging app over HTTPS.
-- [ ] Copy the workflow to `main` so the **Run workflow** button is available.
+- [x] Copy the workflow to `main` so the **Run workflow** button is available.
