@@ -11,7 +11,7 @@ services:
       # With an https:// URL GitLab requests a Let's Encrypt certificate
       # automatically and redirects HTTP to HTTPS.
       GITLAB_OMNIBUS_CONFIG: |
-        external_url '${GITLAB_EXTERNAL_URL:-http://20.55.88.3}'
+        external_url '${GITLAB_EXTERNAL_URL:-http://localhost}'
         gitlab_rails['gitlab_shell_ssh_port'] = 2224
     # HOST:CONTAINER — each host port also needs an Azure NSG rule.
     ports:

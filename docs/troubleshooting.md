@@ -89,6 +89,13 @@ The full run passed end to end: GitLab over HTTPS with all security settings, ro
 | 2 | `main` is protected: changes need a reviewed pull request |
 | 3 | Deployments now run from `main`; the runner VM ignores `custom_data` changes, so the branch switch doesn't rebuild it |
 
+### v5.1 — Runs outside the team's subscription
+| # | Change | Why |
+|---|---|---|
+| 1 | Step 0 runs only when `GITLAB_VM_IP` is the team's platform IP (`gitra-gitlab-vm-ip` in `gitra-rg`) | It adopts the team's existing platform; anywhere else there is nothing to adopt and it would fail. Checking the IP, not just the resource group name, also covers someone who names their group `gitra-rg` |
+| 2 | `docker-compose.yaml` falls back to `http://localhost` when `.env` is missing | A local run must not point GitLab's links at the team's server |
+| 3 | README: *Try it yourself* (checks, local run, own Azure subscription) | Reviewers can run the project on their own machines |
+
 ### Lessons learned
 - **Reproduce before fixing.** The permission bug was recreated on a local GitLab (same error, same restart loop) and the repair was proven there before it touched the real VM.
 - **Don't trust a single signal.** An HTTP answer or Docker's health status isn't proof the application is ready.

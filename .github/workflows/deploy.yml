@@ -116,6 +116,14 @@ jobs:
         if: steps.setup.outputs.ready == 'true'
         working-directory: terraform/gitlab
         run: |
+          # This step manages the team's existing platform only: the one whose IP
+          # is gitra-gitlab-vm-ip in gitra-rg. Anywhere else (e.g. a fork in another
+          # subscription) there is nothing to adopt: step 1 finds the VM by its IP.
+          PIP_ID=$(az network public-ip list --query "[?ipAddress=='$GITLAB_VM_IP'] | [0].id" -o tsv)
+          if [[ "${PIP_ID,,}" != */resourcegroups/gitra-rg/providers/microsoft.network/publicipaddresses/gitra-gitlab-vm-ip ]]; then
+            echo "::notice::$GITLAB_VM_IP is not the team's platform IP — platform step skipped. Step 1 uses the VM at $GITLAB_VM_IP."
+            exit 0
+          fi
           terraform init -input=false \
             -backend-config="resource_group_name=$TF_STATE_RG" \
             -backend-config="storage_account_name=${{ steps.tfstate.outputs.account }}" \
