@@ -89,6 +89,49 @@ gitra-platform/
 
 ---
 
+## Try it yourself
+
+Three ways to run Gitra after cloning, from quickest to complete.
+
+### 1. Checks only (any machine, no Azure, ~2 minutes)
+
+```bash
+git clone https://github.com/Mohammed-Alghumayti/gitra-platform.git && cd gitra-platform
+for d in terraform/gitlab terraform/runner; do (cd $d && terraform init -backend=false && terraform validate && terraform test); done
+cd sample-app && pip install -r requirements.txt && pytest -v
+```
+
+Terraform tests use a mocked Azure provider, so no account is needed. More checks: [Deployment & Operations](docs/deployment.md#local-checks-no-azure-needed).
+
+### 2. On your own machine (Docker, ~8 GB free RAM)
+
+```bash
+cp .env.example .env               # set GITLAB_EXTERNAL_URL=http://localhost
+docker compose up -d               # GitLab needs ports 80, 443 and 2224 free
+./scripts/health_check.sh 900      # waits until GitLab is ready (3–5 minutes)
+./scripts/harden_gitlab.sh         # optional: the same security settings as on Azure
+docker exec gitlab_server cat /etc/gitlab/initial_root_password
+```
+
+Open http://localhost and log in as `root` with that password. The demo app runs on its own:
+
+```bash
+cd sample-app && docker build -t demo . && docker run --rm -p 5000:5000 demo   # http://localhost:5000/health
+```
+
+> To run pipelines locally too, use your machine's network IP instead of `localhost` in `GITLAB_EXTERNAL_URL` (job containers can't reach `localhost`), then `docker compose -f docker-compose.runner.yaml up -d` and `./scripts/register_runner.sh <glrt-token> http://<your-ip>`.
+
+### 3. On your own Azure subscription (fork, ~30 minutes)
+
+1. Fork this repository.
+2. In Azure, create an **Ubuntu** VM with a public IP (4 vCPU / 16 GB recommended, e.g. `Standard_D4s_v4`).
+3. In the fork, add the three secrets from [One-time setup](#one-time-setup-10-minutes-from-the-browser), and the variable `GITLAB_VM_IP` with your VM's public IP.
+4. **Actions → Deploy Gitra Platform → Run workflow.**
+
+The workflow finds your VM by its IP, gives it a DNS name and HTTPS, deploys GitLab, and creates the runner VM with Terraform. Step 0 manages only the team's own `gitra-rg` platform, so in another subscription it is skipped.
+
+---
+
 ## Automatic deployment
 
 ### One-time setup (~10 minutes, from the browser)
