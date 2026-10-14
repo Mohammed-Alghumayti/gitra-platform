@@ -51,7 +51,7 @@ Merge a pull request into `main`, or open **Actions â†’ Deploy Gitra Platform â†
 
 > `main` is protected: changes reach it only through a pull request approved by the team.
 
-> **Another subscription (e.g. a fork):** create an Ubuntu VM with a public IP first and set `GITLAB_VM_IP` to it. Step 0 manages only the team's own `gitra-rg` platform, so it is skipped there; everything else runs the same. See [Try it yourself](../README.md#try-it-yourself).
+> **Another subscription (e.g. a fork):** create an Ubuntu VM with a public IP first and set `GITLAB_VM_IP` to it. Step 0 manages only the team's own platform (the IP `gitra-gitlab-vm-ip` in `gitra-rg`), so it is skipped for any other VM, whatever its resource group is called; everything else runs the same. See [Try it yourself](../README.md#try-it-yourself).
 
 ---
 

@@ -128,7 +128,7 @@ cd sample-app && docker build -t demo . && docker run --rm -p 5000:5000 demo   #
 3. In the fork, add the three secrets from [One-time setup](#one-time-setup-10-minutes-from-the-browser), and the variable `GITLAB_VM_IP` with your VM's public IP.
 4. **Actions → Deploy Gitra Platform → Run workflow.**
 
-The workflow finds your VM by its IP, gives it a DNS name and HTTPS, deploys GitLab, and creates the runner VM with Terraform. Step 0 manages only the team's own `gitra-rg` platform, so in another subscription it is skipped.
+The workflow finds your VM by its IP, gives it a DNS name and HTTPS, deploys GitLab, and creates the runner VM with Terraform. Step 0 manages only the team's own platform (the IP `gitra-gitlab-vm-ip` in `gitra-rg`), so for any other VM it is skipped — whatever your resource group is called, even `gitra-rg`.
 
 ---
 
